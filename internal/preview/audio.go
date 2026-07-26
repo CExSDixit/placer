@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CExSDixit/placer/internal/device"
@@ -23,28 +24,135 @@ func MediaCacheDir() string {
 	return filepath.Join(cacheRoot(), "media")
 }
 
+// LocalPath is where f would live in the media cache, whether or not it has
+// been pulled yet.
+func LocalPath(f device.File) string {
+	return filepath.Join(MediaCacheDir(), cacheKey(f, 0, 0, ProtoHalfBlock)+filepath.Ext(f.Name))
+}
+
+func haveLocal(dst string, size int64) bool {
+	st, err := os.Stat(dst)
+	return err == nil && (size <= 0 || st.Size() == size)
+}
+
+// pullCall is one in-flight pull, shared by every caller that wants the same
+// file. Cursor rest fires the waveform fetch and the autoplay load at the
+// same instant, and both want the same bytes: without this they raced on one
+// temp path, pulled a 150 MB voice memo twice, and whichever lost the race
+// reported `rename: no such file or directory` and never started playing.
+type pullCall struct {
+	done    chan struct{}
+	waiters int
+	cancel  context.CancelFunc
+	path    string
+	err     error
+}
+
+var (
+	pullMu    sync.Mutex
+	pullCalls = map[string]*pullCall{}
+)
+
 // EnsureLocal pulls f to the media cache if it isn't already there and
-// returns the local path. Pulls land on a temp name and are renamed into
-// place, so a cancelled fetch can never leave a truncated file that a later
-// call would happily hand to ffplay.
+// returns the local path. Concurrent callers for the same file share one
+// pull. The bytes land on a unique temp name and are renamed into place, so
+// a cancelled fetch can never leave a truncated file that a later call would
+// hand to ffplay.
 func EnsureLocal(ctx context.Context, dev device.Device, f device.File) (string, error) {
-	ext := filepath.Ext(f.Name)
-	dst := filepath.Join(MediaCacheDir(), cacheKey(f, 0, 0, ProtoHalfBlock)+ext)
-	if st, err := os.Stat(dst); err == nil && (f.Size <= 0 || st.Size() == f.Size) {
+	return ensureLocal(ctx, dev, f, nil)
+}
+
+// EnsureLocalProgress is EnsureLocal with transfer progress, for files big
+// enough that "loading…" alone is not an honest status — voice memos on the
+// reference device run to 300 MB.
+func EnsureLocalProgress(ctx context.Context, dev device.Device, f device.File, prog func(device.Progress)) (string, error) {
+	return ensureLocal(ctx, dev, f, prog)
+}
+
+func ensureLocal(ctx context.Context, dev device.Device, f device.File, prog func(device.Progress)) (string, error) {
+	dst := LocalPath(f)
+	if haveLocal(dst, f.Size) {
 		return dst, nil
 	}
+
+	pullMu.Lock()
+	c, running := pullCalls[dst]
+	if !running {
+		// The pull runs under its own context, not the first caller's: the
+		// preview fetch and the autoplay load are cancelled independently,
+		// and whichever is cancelled first must not kill the other's pull.
+		pullCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		c = &pullCall{done: make(chan struct{}), cancel: cancel}
+		pullCalls[dst] = c
+		go func() {
+			c.path, c.err = doPull(pullCtx, dev, f, dst, prog)
+			pullMu.Lock()
+			if cur, ok := pullCalls[dst]; ok && cur == c {
+				delete(pullCalls, dst)
+			}
+			pullMu.Unlock()
+			cancel()
+			close(c.done)
+		}()
+	}
+	c.waiters++
+	pullMu.Unlock()
+
+	leave := func() {
+		pullMu.Lock()
+		c.waiters--
+		last := c.waiters == 0
+		if last {
+			// Unregister before cancelling. Otherwise a caller arriving in the
+			// window between the cancel and the goroutine's own cleanup would
+			// join a call that is already dying and inherit its
+			// "context canceled" — so moving the cursor away and straight back
+			// would fail instead of starting a fresh pull.
+			if cur, ok := pullCalls[dst]; ok && cur == c {
+				delete(pullCalls, dst)
+			}
+		}
+		pullMu.Unlock()
+		if last {
+			// Nobody is waiting any more — stop the transfer rather than
+			// letting an abandoned 300 MB pull run to completion.
+			c.cancel()
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		leave()
+		return "", ctx.Err()
+	case <-c.done:
+		leave()
+		return c.path, c.err
+	}
+}
+
+func doPull(ctx context.Context, dev device.Device, f device.File, dst string, prog func(device.Progress)) (string, error) {
 	if err := os.MkdirAll(MediaCacheDir(), 0o755); err != nil {
 		return "", err
 	}
-	tmp := dst + ".partial"
-	defer os.Remove(tmp)
-	if err := dev.Pull(ctx, f.Path, tmp, nil); err != nil {
+	tmp, err := os.CreateTemp(MediaCacheDir(), ".partial-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+
+	if err := dev.Pull(ctx, f.Path, tmpPath, prog); err != nil {
 		return "", err
 	}
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := os.Rename(tmpPath, dst); err != nil {
+		// Another process won the race and put an identical file there.
+		if haveLocal(dst, f.Size) {
+			return dst, nil
+		}
 		return "", err
 	}
 	return dst, nil
@@ -184,7 +292,7 @@ func fetchAudio(ctx context.Context, dev device.Device, f device.File, cellW, ce
 		res.Note = "audio — waveform render failed"
 		return res, nil
 	}
-	writeCache(f, cellW, cellH, proto, rendered)
+	writeCache(f, cellW, cellH, proto, "", rendered)
 	res.Rendered = rendered
 	return res, nil
 }

@@ -90,6 +90,13 @@ type Model struct {
 	cmdHistory []string
 	cmdHistIdx int
 	cmdDraft   string
+	cmdHint    string // completion candidates, shown beside the `:` line
+
+	// videoSeek is where in the video the previewed frame is grabbed from,
+	// driven by h/l in the Video tab. Reset when the cursor lands on a
+	// different file — a scrub position is about one video, not the list.
+	videoSeek    time.Duration
+	videoSeekKey string
 
 	// selection review pane
 	selCursor, selOffset int
@@ -128,6 +135,7 @@ type Model struct {
 	playGen    int
 	playErr    string
 	playLoad   string // name of the file being pulled before playback, "" if none
+	playPct    int    // adb transfer percent for that pull
 	playCancel context.CancelFunc
 }
 
@@ -135,6 +143,11 @@ func New(dev device.Device, proto preview.Protocol) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	cfg := session.LoadConfig()
+	// A saved `:set render` beats autodetection: the user has looked at both
+	// and picked, which is better evidence than a capability probe.
+	if p, ok := preview.ParseProtocol(cfg.Render); ok {
+		proto = p
+	}
 	return Model{
 		dev:     dev,
 		cfg:     cfg,
@@ -182,6 +195,14 @@ type audioReadyMsg struct {
 
 // playTickMsg repaints the playhead while audio is playing.
 type playTickMsg struct{ gen int }
+
+// pullProgressMsg reports adb transfer progress for a file being loaded for
+// playback, and carries the channel so the next read can be scheduled.
+type pullProgressMsg struct {
+	gen int
+	pct int
+	ch  chan int
+}
 
 // previewResultMsg carries a completed fetch back to Update. A stale seq
 // means the cursor moved on before this finished; it's discarded rather than
@@ -304,6 +325,12 @@ func (m *Model) schedulePreview() tea.Cmd {
 	}
 	path := previewKeyFor(f)
 
+	// A scrub position belongs to one video; landing on a different file
+	// starts over at the default seek point.
+	if m.videoSeekKey != path {
+		m.videoSeekKey, m.videoSeek = path, preview.DefaultFrameSeek
+	}
+
 	cellW, _ := m.previewCellSize()
 	fetch := m.cfg.Preview && cellW > 0
 
@@ -360,6 +387,7 @@ func (m *Model) stopPlayback() {
 		m.playCancel = nil
 	}
 	m.playLoad = ""
+	m.playPct = 0
 	m.player.Stop()
 }
 
@@ -370,17 +398,52 @@ func (m *Model) shutdown() {
 	m.stopPlayback()
 }
 
-// loadAndPlay pulls f into the media cache (a no-op when the preview fetch
-// already cached it, which is the common case) and hands it to the player.
+// loadAndPlay pulls f into the media cache and hands it to the player. The
+// pull is shared with the waveform fetch that cursor rest kicks off at the
+// same instant (see preview.EnsureLocal) — they used to race, pull a 150 MB
+// voice memo twice, and leave one of them erroring on the rename.
+//
+// Progress is reported because these files are big: voice memos on the
+// reference device run to 300 MB, and a bare "loading…" for eight seconds
+// looks indistinguishable from a hang.
 func (m *Model) loadAndPlay(f device.File, gen int, at time.Duration) tea.Cmd {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	m.playCancel = cancel
 	m.playLoad = f.Name
+	m.playPct = 0
 	m.playErr = ""
 	dev := m.dev
-	return func() tea.Msg {
-		local, err := preview.EnsureLocal(ctx, dev, f)
+
+	// Progress arrives on adb's goroutine; hand it to Bubble Tea as messages
+	// rather than writing into the model from another goroutine.
+	prog := make(chan int, 8)
+	pull := func() tea.Msg {
+		local, err := preview.EnsureLocalProgress(ctx, dev, f, func(p device.Progress) {
+			select {
+			case prog <- p.Percent:
+			default: // never block the transfer on a full channel
+			}
+		})
+		close(prog)
 		return audioReadyMsg{gen: gen, file: f, local: local, at: at, err: err}
+	}
+	watch := func() tea.Msg {
+		pct, ok := <-prog
+		if !ok {
+			return nil
+		}
+		return pullProgressMsg{gen: gen, pct: pct, ch: prog}
+	}
+	return tea.Batch(pull, watch)
+}
+
+func waitPullProgress(gen int, ch chan int) tea.Cmd {
+	return func() tea.Msg {
+		pct, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return pullProgressMsg{gen: gen, pct: pct, ch: ch}
 	}
 }
 
@@ -502,9 +565,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cellW > 0 {
 				ctx, cancel := context.WithCancel(context.Background())
 				m.previewCancel = cancel
-				dev, proto, seq := m.dev, m.proto, msg.seq
+				dev, proto, seq, at := m.dev, m.proto, msg.seq, m.videoSeek
 				cmds = append(cmds, func() tea.Msg {
-					res, err := preview.Fetch(ctx, dev, f, cellW, cellH, proto)
+					res, err := preview.FetchAt(ctx, dev, f, cellW, cellH, proto, at)
 					return previewResultMsg{seq: seq, result: res, err: err}
 				})
 			}
@@ -521,12 +584,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preview.err = msg.err
 		return m, nil
 
+	case pullProgressMsg:
+		if msg.gen != m.playGen {
+			return m, nil // stale — the cursor moved on mid-pull
+		}
+		m.playPct = msg.pct
+		return m, waitPullProgress(msg.gen, msg.ch)
+
 	case audioReadyMsg:
 		if msg.gen != m.playGen {
 			return m, nil // stale — playback was stopped or moved on mid-pull
 		}
 		m.playCancel = nil
 		m.playLoad = ""
+		m.playPct = 0
 		if msg.err != nil {
 			m.playErr = msg.err.Error()
 			return m, nil
@@ -613,9 +684,11 @@ func (m Model) handleKey(km tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "ctrl+c":
 			m.mode = modeNormal
 			m.input.Blur()
+			m.cmdHint = ""
 			return m, nil
 		case "enter":
 			cmdline := m.input.Value()
+			m.cmdHint = ""
 			m.mode = modeNormal
 			m.input.Blur()
 			m.input.SetValue("")
@@ -623,20 +696,24 @@ func (m Model) handleKey(km tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cmdHistIdx = len(m.cmdHistory)
 			return m.runCommand(cmdline)
 		case "tab":
+			// The candidate list goes in cmdHint, not setStatus: the footer
+			// is showing the `:` line while command mode is open, so a status
+			// message would never be seen.
 			line, hint := m.completeCommand(m.input.Value())
 			m.input.SetValue(line)
 			m.input.CursorEnd()
-			if hint != "" {
-				return m, m.setStatus(hint)
-			}
+			m.cmdHint = hint
 			return m, nil
 		case "up":
 			m.historyStep(-1)
+			m.cmdHint = ""
 			return m, nil
 		case "down":
 			m.historyStep(1)
+			m.cmdHint = ""
 			return m, nil
 		}
+		m.cmdHint = ""
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(km)
 		return m, cmd
@@ -715,6 +792,15 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 	// had since phase 1 everywhere else in the app.
 	if m.tab == index.TabAudio && m.player.Available() {
 		if handled, cmd := m.handleTransportKey(k); handled {
+			return m, cmd
+		}
+	}
+	// Same keys, same meaning, different medium: in the Video tab h/l scrub
+	// the frame the preview is grabbed from. A single frame at 0:01 tells you
+	// which gym video it is but not much else, so being able to step through
+	// is what makes the preview useful for review.
+	if m.tab == index.TabVideo && m.cfg.Autoplay {
+		if handled, cmd := m.handleFrameKey(k); handled {
 			return m, cmd
 		}
 	}
@@ -842,6 +928,7 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		m.mode = modeCommand
 		m.input.SetValue("")
 		m.input.Focus()
+		m.cmdHint = ""
 		m.cmdHistIdx = len(m.cmdHistory)
 		m.cmdDraft = ""
 		return m, textinput.Blink
@@ -927,6 +1014,47 @@ func (m *Model) handleTransportKey(k string) (bool, tea.Cmd) {
 		return true, playTick(m.playGen)
 	}
 	return true, nil
+}
+
+// handleFrameKey scrubs the video preview's grab point. It reuses the same
+// debounced fetch as a cursor move, so holding `l` down coalesces into one
+// grab at the position you stop on rather than one per keypress.
+func (m *Model) handleFrameKey(k string) (bool, tea.Cmd) {
+	f, ok := m.cur()
+	if !ok {
+		return false, nil
+	}
+	var delta time.Duration
+	switch k {
+	case "l", "right":
+		delta = seekSmall
+	case "h", "left":
+		delta = -seekSmall
+	case "L":
+		delta = seekLarge
+	case "H":
+		delta = -seekLarge
+	case "0":
+		delta = -m.videoSeek + preview.DefaultFrameSeek
+	default:
+		return false, nil
+	}
+
+	at := m.videoSeek + delta
+	if at < 0 {
+		at = 0
+	}
+	// Stay a second short of the end: seeking to the final frame of a
+	// container routinely decodes to nothing.
+	if f.Duration > time.Second && at > f.Duration-time.Second {
+		at = f.Duration - time.Second
+	}
+	if at == m.videoSeek {
+		return true, nil
+	}
+	m.videoSeek = at
+	m.videoSeekKey = previewKeyFor(f)
+	return true, m.schedulePreview()
 }
 
 func (m *Model) rangeBounds() (int, int) {
@@ -1164,9 +1292,23 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 // hold a key down to stop something playing.
 func (m Model) runSet(arg string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(arg)
-	if len(fields) != 2 || (fields[1] != "on" && fields[1] != "off") {
-		return m, m.setStatus(errStyle.Render("usage: :set preview|autoplay|audio on|off"))
+	if len(fields) != 2 || (fields[0] != "render" && fields[1] != "on" && fields[1] != "off") {
+		return m, m.setStatus(errStyle.Render("usage: :set preview|autoplay|audio on|off · :set render quadrant|halfblock"))
 	}
+	// `:set render <mode>` is the one setting whose value isn't on|off: it
+	// picks the block-drawing scheme, which is the ceiling on preview quality
+	// in a terminal with no image protocol.
+	if fields[0] == "render" {
+		p, ok := preview.ParseProtocol(fields[1])
+		if !ok {
+			return m, m.setStatus(errStyle.Render("render: quadrant|halfblock|kitty|iterm|sixel"))
+		}
+		m.proto = p
+		m.cfg.Render = fields[1]
+		_ = m.cfg.Save()
+		return m, tea.Batch(m.schedulePreview(), m.setStatus("render: "+p.String()))
+	}
+
 	on := fields[1] == "on"
 	switch fields[0] {
 	case "preview":

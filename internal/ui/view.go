@@ -137,7 +137,7 @@ func (m Model) previewPaneView(pw, height int) string {
 	case len(res.Rendered) == 0:
 		fill(dimStyle.Render(pad("no preview", pw)))
 
-	case m.proto == preview.ProtoHalfBlock:
+	case m.proto.IsText():
 		for i := 1; i < height; i++ {
 			lines[i] = ""
 		}
@@ -188,7 +188,7 @@ func (m Model) overlayRows() int {
 // terminal file managers (yazi, ranger, lf) use for Kitty previews in a
 // line-based TUI.
 func (m Model) graphicsOverlay() string {
-	if m.proto == preview.ProtoHalfBlock {
+	if m.proto.IsText() {
 		return ""
 	}
 	pw := m.previewPaneWidth()
@@ -257,8 +257,13 @@ func (m Model) header() string {
 	// terminal there may be room for none of it.
 	avail := m.w - lipgloss.Width(left) - 2
 	rightPlain := ""
+	// The render protocol is worth a slot: it is the ceiling on preview
+	// quality and it is invisible otherwise. "halfblock" means the terminal
+	// advertises no image protocol at all (Terminal.app), so previews are
+	// coarse by construction — a Kitty-protocol terminal shows real images.
 	for _, c := range []string{
-		fmt.Sprintf("%s · sort:%s · %s", m.dev.Serial(), index.SortNames[m.sortBy], transfer.PolicyNames[m.pol]),
+		fmt.Sprintf("%s · sort:%s · %s · %s", m.dev.Serial(), index.SortNames[m.sortBy], transfer.PolicyNames[m.pol], m.proto),
+		fmt.Sprintf("%s · sort:%s · %s", m.dev.Serial(), index.SortNames[m.sortBy], m.proto),
 		fmt.Sprintf("%s · sort:%s", m.dev.Serial(), index.SortNames[m.sortBy]),
 		m.dev.Serial(),
 		fmt.Sprintf("sort:%s", index.SortNames[m.sortBy]),
@@ -540,7 +545,17 @@ func (m Model) footer() string {
 	case modeSearch:
 		return promptStyle.Render("/") + m.input.View()
 	case modeCommand:
-		return promptStyle.Render(":") + m.input.View()
+		line := promptStyle.Render(":") + m.input.View()
+		if m.cmdHint != "" {
+			// Candidates sit beside the input, not in the status row: the
+			// footer IS the command line while command mode is open, so a
+			// status message here would never be seen.
+			room := m.w - lipgloss.Width(line) - 4
+			if room > 8 {
+				line += "   " + dimStyle.Render(trunc(m.cmdHint, room))
+			}
+		}
+		return line
 	}
 	if m.errMsg != "" {
 		return errStyle.Render(trunc(m.errMsg, m.w))
@@ -560,6 +575,9 @@ func (m Model) footer() string {
 		return ""
 	}
 	hint := "j/k move · tab select · V range · * select-match · / search · d dest · p pull · s review · ? help · q quit"
+	if m.tab == index.TabVideo && m.cfg.Autoplay {
+		hint = "j/k move · h/l scrub frame ±5s · H/L ±30s · 0 reset · tab select · / search · p pull · ? help"
+	}
 	if m.visual {
 		hint = visualStyle.Render(" VISUAL ") + " j/k extend · tab toggle range · esc cancel"
 	}
@@ -574,7 +592,13 @@ func (m Model) transportLine() string {
 		return errStyle.Render("playback: " + m.playErr)
 	}
 	if m.playLoad != "" {
-		return dimStyle.Render("⏳ " + trunc(m.playLoad, max(10, m.w-20)))
+		// These files are big — 300 MB voice memos on the reference device —
+		// so show the transfer, not just a spinner.
+		pct := ""
+		if m.playPct > 0 {
+			pct = fmt.Sprintf(" %s", bar(m.playPct, min(24, max(8, m.w/4))))
+		}
+		return dimStyle.Render("⏳ "+trunc(m.playLoad, max(10, m.w-40))) + pct
 	}
 	_, name := m.player.Loaded()
 	if name == "" {
@@ -589,8 +613,10 @@ func (m Model) transportLine() string {
 	if s := m.player.Speed(); s != 1 {
 		speed = fmt.Sprintf(" · %.2fx", s)
 	}
+	// "tab select" leads the hints: space is play/pause here, so the way to
+	// add a file to the manifest is the one thing this row must not omit.
 	tail := fmt.Sprintf(" %s%s  %s", pos, speed,
-		dimStyle.Render("space play/pause · h/l ±5s · H/L ±30s · [/] speed"))
+		dimStyle.Render("tab select · space play/pause · h/l ±5s · H/L ±30s · [/] speed"))
 	nameW := max(10, m.w-lipgloss.Width(tail)-4)
 	return selectedStyle.Render(icon) + " " + trunc(name, nameW) + tail
 }
@@ -607,10 +633,13 @@ func (m Model) helpView() string {
 		{"ctrl+x", "clear all visible from selection"},
 		{"*", "select everything matching the current filter"},
 		{"y", "add to selection without toggling"},
-		{"space (Audio tab)", "play / pause the file under the cursor"},
+		{"space (Audio tab)", "play / pause (tab still selects — space is transport here)"},
 		{"h / l (Audio tab)", "seek ∓5s"},
 		{"H / L (Audio tab)", "seek ∓30s"},
 		{"[ / ] (Audio tab)", "playback speed down / up (0.5x–2x)"},
+		{"h / l (Video tab)", "scrub the previewed frame ∓5s (needs :set autoplay on)"},
+		{"H / L (Video tab)", "scrub the previewed frame ∓30s"},
+		{"0 (Video tab)", "reset the frame to 0:01"},
 		{"s", "selection review (d removes, c clears)"},
 		{"d", "destination picker"},
 		{"p", "pull selection to destination"},

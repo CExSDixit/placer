@@ -79,15 +79,17 @@ func (f *Fake) ExecOut(ctx context.Context, cmd string) ([]byte, error) {
 	return nil, fmt.Errorf("fake: ExecOut not implemented for %q", cmd)
 }
 
-// ddRe matches the `dd` invocations the sparse video preview issues:
+// ddRe matches the `dd` invocations the sparse video preview issues, in any
+// combination of skip/count:
 //
-//	dd if='<path>' bs=<n> count=<n> 2>/dev/null
-//	dd if='<path>' bs=<n> skip=<n> 2>/dev/null
+//	dd if='<path>' bs=<n> count=<n> 2>/dev/null           the header
+//	dd if='<path>' bs=<n> skip=<n> count=<n> 2>/dev/null  a scrub window
+//	dd if='<path>' bs=<n> skip=<n> 2>/dev/null            the tail, to EOF
 //
-// Reproducing them against SrcDir is what lets the head+tail reconstruction —
+// Reproducing them against SrcDir is what lets the sparse reconstruction —
 // the one place where an offset error silently yields a corrupt frame rather
 // than an error — be tested with no phone attached.
-var ddRe = regexp.MustCompile(`^dd if='(.*)' bs=(\d+)(?: count=(\d+))?(?: skip=(\d+))? 2>/dev/null$`)
+var ddRe = regexp.MustCompile(`^dd if='(.*)' bs=(\d+)((?: (?:skip|count)=\d+)*) 2>/dev/null$`)
 
 func (f *Fake) fakeDD(cmd string) ([]byte, bool, error) {
 	m := ddRe.FindStringSubmatch(cmd)
@@ -104,9 +106,19 @@ func (f *Fake) fakeDD(cmd string) ([]byte, bool, error) {
 	defer fh.Close()
 
 	bs, _ := strconv.ParseInt(m[2], 10, 64)
-	if skip := m[4]; skip != "" {
-		n, _ := strconv.ParseInt(skip, 10, 64)
-		if _, err := fh.Seek(n*bs, io.SeekStart); err != nil {
+	var skip, count int64 = 0, -1
+	for _, opt := range strings.Fields(m[3]) {
+		k, v, _ := strings.Cut(opt, "=")
+		n, _ := strconv.ParseInt(v, 10, 64)
+		switch k {
+		case "skip":
+			skip = n
+		case "count":
+			count = n
+		}
+	}
+	if skip > 0 {
+		if _, err := fh.Seek(skip*bs, io.SeekStart); err != nil {
 			return nil, true, err
 		}
 	}
@@ -114,9 +126,8 @@ func (f *Fake) fakeDD(cmd string) ([]byte, bool, error) {
 	// out of the payload — adb exec-out folds device stderr into stdout, and
 	// real hardware appends exactly 78 bytes without it. The fake emits the
 	// payload alone, matching the corrected command.
-	if count := m[3]; count != "" {
-		n, _ := strconv.ParseInt(count, 10, 64)
-		return readFull(fh, n*bs)
+	if count >= 0 {
+		return readFull(fh, count*bs)
 	}
 	b, err := io.ReadAll(fh)
 	return b, true, err

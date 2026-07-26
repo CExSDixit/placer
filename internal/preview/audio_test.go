@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -108,12 +109,28 @@ func TestEnsureLocal_CancelLeavesNoPartial(t *testing.T) {
 	if _, err := EnsureLocal(ctx, dev, f); err == nil {
 		t.Fatal("expected an error from a cancelled context")
 	}
-	// A truncated file left at the real cache path would be handed to ffplay
-	// on the next press of space, so the pull lands on a .partial name and is
-	// only renamed once complete.
+
+	// The cache path itself must never hold a truncated file — that is what
+	// would be handed to ffplay on the next press of space. Checked
+	// immediately, because the rename only happens on a complete pull.
+	if _, err := os.Stat(LocalPath(f)); err == nil {
+		t.Error("a cancelled pull left a file at the cache path")
+	}
+
+	// The abandoned pull's goroutine outlives the cancelled caller by design —
+	// cancellation returns promptly rather than blocking on teardown — so
+	// drain it with a completing call before asserting on the directory.
+	local, err := EnsureLocal(context.Background(), dev, f)
+	if err != nil {
+		t.Fatalf("EnsureLocal after a cancel: %v", err)
+	}
 	entries, _ := os.ReadDir(MediaCacheDir())
-	for _, e := range entries {
-		t.Errorf("cancelled pull left %q behind", e.Name())
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("media cache holds %v, want only %s", names, filepath.Base(local))
 	}
 }
 

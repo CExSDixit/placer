@@ -133,6 +133,11 @@ type Config struct {
 	Preview  bool `json:"preview"`  // image preview on cursor rest
 	Autoplay bool `json:"autoplay"` // video frame-grab autoplay on cursor rest
 	Audio    bool `json:"audio"`    // audio auto-play on j/k (phase 3)
+
+	// Render overrides the detected terminal image protocol, e.g. to fall
+	// back from quadrant blocks to half-blocks on a font that draws the
+	// quadrant glyphs with gaps. Empty means "use whatever was detected".
+	Render string `json:"render,omitempty"`
 }
 
 func CacheDir() string {
@@ -185,6 +190,7 @@ func LoadConfig() Config {
 		c.Bookmarks = got.Bookmarks
 	}
 	c.Recents = got.Recents
+	c.Render = got.Render
 
 	// The preview toggles default true/false/true; only override them from a
 	// config.json that actually mentions the key, so an old config file

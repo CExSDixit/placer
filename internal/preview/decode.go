@@ -13,10 +13,10 @@ import (
 
 var errUnsupportedFormat = errors.New("preview: unsupported image format")
 
-// maxPreviewPixels bounds the decoded/rendered image so a 48 MP photo isn't
-// downscaled from full resolution on every cursor rest; it only needs to
-// look right at a few hundred pixels.
-const maxPreviewDim = 800
+// maxPreviewDim bounds the decoded/rendered image so a 48 MP photo isn't
+// carried around at full resolution; nothing here needs more than a
+// graphics-protocol terminal can show in a third of a window.
+const maxPreviewDim = 1600
 
 // decodeStdlib handles the 99.4% case: JPEG, PNG, GIF via Go's stdlib.
 func decodeStdlib(mime string, data []byte) (image.Image, error) {
@@ -41,34 +41,58 @@ func mimeIs(mime, want string) bool {
 	return len(mime) >= len(want) && mime[:len(want)] == want
 }
 
-// downscale fits img within w×h terminal cells using a CatmullRom filter —
-// there's no fast path here worth taking since previews are cached after the
-// first decode.
-func downscale(img image.Image, cellW, cellH int) image.Image {
-	pxW, pxH := targetPixels(img.Bounds().Dx(), img.Bounds().Dy(), cellW, cellH)
+// downscale fits img within w×h terminal cells for the given protocol, using
+// a CatmullRom filter — there's no fast path worth taking since previews are
+// cached after the first decode.
+func downscale(img image.Image, cellW, cellH int, proto Protocol) image.Image {
+	pxW, pxH := targetPixels(img.Bounds().Dx(), img.Bounds().Dy(), cellW, cellH, proto)
 	dst := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
 	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
 	return dst
 }
 
-// targetPixels fits the source aspect ratio inside cellW×cellH terminal
-// cells, assuming the classic ~2:1 character cell (each row of characters
-// covers roughly two rows of pixels, per half-block rendering).
-func targetPixels(srcW, srcH, cellW, cellH int) (int, int) {
+// subcell reports how many source pixels each terminal cell carries, which is
+// the entire resolution story for a preview:
+//
+//	half-block   1×2 — one glyph, foreground over background
+//	quadrant     2×2 — twice the horizontal detail for the same pane
+//	kitty/iterm  8×16 — a real image; the cell grid stops being the limit
+//
+// The graphics protocols were previously fed a source only cellW pixels wide,
+// i.e. ~48 px for a whole photo, and then asked to scale it up to fill the
+// pane. That threw away almost everything before the terminal ever saw it.
+func (p Protocol) subcell() (int, int) {
+	switch p {
+	case ProtoQuadrant:
+		return 2, 2
+	case ProtoKitty, ProtoIterm, ProtoSixel:
+		return 8, 16
+	default:
+		return 1, 2
+	}
+}
+
+// targetPixels fits the source aspect ratio inside cellW×cellH terminal cells
+// at the protocol's pixel density.
+func targetPixels(srcW, srcH, cellW, cellH int, proto Protocol) (int, int) {
 	if srcW <= 0 || srcH <= 0 {
 		srcW, srcH = 1, 1
 	}
-	maxW := min(cellW, maxPreviewDim)
-	maxH := min(cellH*2, maxPreviewDim)
+	sx, sy := proto.subcell()
+	maxW := min(cellW*sx, maxPreviewDim)
+	maxH := min(cellH*sy, maxPreviewDim)
 	scale := min(float64(maxW)/float64(srcW), float64(maxH)/float64(srcH))
 	if scale > 1 {
-		scale = 1
+		scale = 1 // never upscale; a small source stays small rather than soft
 	}
 	w := max(1, int(float64(srcW)*scale))
 	h := max(1, int(float64(srcH)*scale))
-	// Half-block rendering needs an even pixel height so each character row
-	// maps to exactly two pixel rows.
-	if h%2 != 0 {
+	// Block rendering maps a whole number of pixel rows/columns per glyph, so
+	// round up to the subcell grid rather than dropping a partial row.
+	for w%sx != 0 {
+		w++
+	}
+	for h%sy != 0 {
 		h++
 	}
 	return w, h

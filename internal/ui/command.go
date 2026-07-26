@@ -23,11 +23,15 @@ var commandNames = []string{
 var staticArgs = map[string][]string{
 	"sort":   {"date", "name", "size"},
 	"policy": {"skip", "overwrite", "rename"},
-	"set":    {"audio", "autoplay", "preview"},
+	"set":    {"audio", "autoplay", "preview", "render"},
 }
 
 // setValues completes the second word of `:set <toggle> …`.
 var setValues = []string{"off", "on"}
+
+// renderValues completes `:set render <mode>`, the one setting whose value
+// is not on|off.
+var renderValues = []string{"halfblock", "iterm", "kitty", "quadrant", "sixel"}
 
 // candidates returns the completions available for a partially typed command
 // line, along with the prefix they should replace.
@@ -60,6 +64,10 @@ func (m Model) candidates(line string) (prefix string, opts []string) {
 		names = append(names, "clear")
 		sort.Strings(names)
 		return lastWord(fields, atWordStart), matching(names, lastWord(fields, atWordStart))
+
+	case fields[0] == "set" && len(fields) >= 2 && fields[1] == "render" && (len(fields) > 2 || atWordStart):
+		word := lastWord(fields, atWordStart)
+		return word, matching(renderValues, word)
 
 	case fields[0] == "set" && (len(fields) > 2 || (len(fields) == 2 && atWordStart)):
 		word := lastWord(fields, atWordStart)

@@ -30,6 +30,7 @@ type Result struct {
 	Meta     []string
 	Local    string        // local path of the pulled file (audio, for playback)
 	Duration time.Duration // container duration when ffprobe disagreed with MediaStore
+	At       time.Duration // seek point this video frame was grabbed at
 }
 
 // HasImage reports whether Rendered holds graphics-protocol bytes that the
@@ -51,11 +52,17 @@ func MetaCard(f device.File, note string) Result {
 // render all happen after checks), so a cursor move that cancels ctx stops
 // the fetch promptly rather than finishing a now-stale request.
 func Fetch(ctx context.Context, dev device.Device, f device.File, cellW, cellH int, proto Protocol) (Result, error) {
+	return FetchAt(ctx, dev, f, cellW, cellH, proto, frameSeek)
+}
+
+// FetchAt is Fetch with an explicit seek point for video frame grabs — what
+// h/l scrubbing in the Video tab drives. Ignored for every other tier.
+func FetchAt(ctx context.Context, dev device.Device, f device.File, cellW, cellH int, proto Protocol, at time.Duration) (Result, error) {
 	switch f.Kind() {
 	case device.KindImage:
 		return fetchImage(ctx, dev, f, cellW, cellH, proto)
 	case device.KindVideo:
-		return fetchVideo(ctx, dev, f, cellW, cellH, proto)
+		return fetchVideo(ctx, dev, f, cellW, cellH, proto, at)
 	case device.KindAudio:
 		return fetchAudio(ctx, dev, f, cellW, cellH, proto)
 	default:
@@ -106,13 +113,13 @@ func fetchImage(ctx context.Context, dev device.Device, f device.File, cellW, ce
 		return Result{}, ctx.Err()
 	}
 
-	small := downscale(img, cellW, cellH)
+	small := downscale(img, cellW, cellH, proto)
 	rendered, err := Render(small, proto, cellW, cellH)
 	if err != nil {
 		return Result{}, fmt.Errorf("render %s: %w", f.Name, err)
 	}
 
-	writeCache(f, cellW, cellH, proto, rendered)
+	writeCache(f, cellW, cellH, proto, "", rendered)
 	return Result{Tier: tier, Rendered: rendered}, nil
 }
 
@@ -124,7 +131,7 @@ func RenderImage(data []byte, mime string, cellW, cellH int, proto Protocol) ([]
 	if err != nil {
 		return nil, err
 	}
-	return Render(downscale(img, cellW, cellH), proto, cellW, cellH)
+	return Render(downscale(img, cellW, cellH, proto), proto, cellW, cellH)
 }
 
 // pullBytes fetches the whole file — the EXIF head-bytes fast path was

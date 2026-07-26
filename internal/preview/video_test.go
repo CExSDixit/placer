@@ -45,7 +45,7 @@ func TestBuildSparse_Offsets(t *testing.T) {
 	dev := &device.Fake{SrcDir: dir, Latency: time.Millisecond, Speed: 100 << 20}
 
 	dst := filepath.Join(t.TempDir(), "sparse.mp4")
-	moved, err := buildSparse(context.Background(), dev, f, dst, sparseTail)
+	moved, err := buildSparse(context.Background(), dev, f, dst, DefaultFrameSeek, sparseTail)
 	if err != nil {
 		t.Fatalf("buildSparse: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestGrabFrame_SparseMatchesFullPull(t *testing.T) {
 	dev := &device.Fake{SrcDir: dir, Latency: time.Millisecond, Speed: 100 << 20}
 
 	dst := filepath.Join(t.TempDir(), "sparse.mp4")
-	if _, err := buildSparse(context.Background(), dev, f, dst, sparseTail); err != nil {
+	if _, err := buildSparse(context.Background(), dev, f, dst, DefaultFrameSeek, sparseTail); err != nil {
 		t.Fatalf("buildSparse: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestBuildSparse_RejectsMisalignedTail(t *testing.T) {
 	dev := shortTailDevice{&device.Fake{SrcDir: dir, Latency: time.Millisecond, Speed: 100 << 20}}
 
 	dst := filepath.Join(t.TempDir(), "sparse.mp4")
-	_, err := buildSparse(context.Background(), dev, f, dst, sparseTail)
+	_, err := buildSparse(context.Background(), dev, f, dst, DefaultFrameSeek, sparseTail)
 	if err == nil {
 		t.Fatal("expected an error when the tail does not reach the end of the file")
 	}
@@ -171,7 +171,7 @@ func TestBuildSparse_TooSmallFallsBack(t *testing.T) {
 	dev := &device.Fake{SrcDir: dir, Latency: time.Millisecond, Speed: 100 << 20}
 
 	_, err := buildSparse(context.Background(), dev, small,
-		filepath.Join(t.TempDir(), "sparse.mp4"), sparseTail)
+		filepath.Join(t.TempDir(), "sparse.mp4"), DefaultFrameSeek, sparseTail)
 	if !errors.Is(err, errSparseTooSmall) {
 		t.Fatalf("err = %v, want errSparseTooSmall", err)
 	}

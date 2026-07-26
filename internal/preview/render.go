@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 
 	"github.com/BourgeoisBear/rasterm"
@@ -18,10 +19,11 @@ import (
 type Protocol int
 
 const (
-	ProtoHalfBlock Protocol = iota // works everywhere; ~2 pixel rows per cell
+	ProtoHalfBlock Protocol = iota // "▀" — 1×2 pixels per cell, works literally everywhere
 	ProtoSixel
 	ProtoIterm
 	ProtoKitty
+	ProtoQuadrant // 2×2 pixels per cell via quadrant blocks — twice the detail
 )
 
 func (p Protocol) String() string {
@@ -32,8 +34,34 @@ func (p Protocol) String() string {
 		return "iterm"
 	case ProtoSixel:
 		return "sixel"
+	case ProtoQuadrant:
+		return "quadrant"
 	}
 	return "halfblock"
+}
+
+// ParseProtocol resolves the names `:set render` accepts.
+func ParseProtocol(s string) (Protocol, bool) {
+	switch s {
+	case "halfblock", "half":
+		return ProtoHalfBlock, true
+	case "quadrant", "quad":
+		return ProtoQuadrant, true
+	case "kitty":
+		return ProtoKitty, true
+	case "iterm":
+		return ProtoIterm, true
+	case "sixel":
+		return ProtoSixel, true
+	}
+	return 0, false
+}
+
+// IsText reports whether this protocol's output is ordinary printable
+// characters the pane can lay out inline, rather than graphics escapes that
+// have to be placed by absolute cursor position (see ui.graphicsOverlay).
+func (p Protocol) IsText() bool {
+	return p == ProtoHalfBlock || p == ProtoQuadrant
 }
 
 // DetectProtocol picks the richest protocol the terminal advertises. Must be
@@ -42,9 +70,12 @@ func (p Protocol) String() string {
 //
 // Ghostty/kitty/WezTerm speak the Kitty graphics protocol; iTerm2/WezTerm
 // speak the iTerm2 protocol; Terminal.app speaks neither (measured:
-// `kitty:false sixel:false iterm:false`), so it lands on the half-block
-// fallback — fine for "is this the right photo", the only job a preview here
-// has to do.
+// `kitty:false sixel:false iterm:false`).
+//
+// The no-protocol fallback is quadrant blocks, not half-blocks: same
+// compatibility — they are legacy code-page glyphs present in every
+// monospace font — for twice the horizontal resolution. `:set render
+// halfblock` goes back if a font renders them with gaps.
 func DetectProtocol() Protocol {
 	if rasterm.IsKittyCapable() {
 		return ProtoKitty
@@ -55,7 +86,7 @@ func DetectProtocol() Protocol {
 	if ok, err := rasterm.IsSixelCapable(); err == nil && ok {
 		return ProtoSixel
 	}
-	return ProtoHalfBlock
+	return ProtoQuadrant
 }
 
 // Render encodes img for the given protocol at cellW×cellH terminal cells.
@@ -80,9 +111,109 @@ func Render(img image.Image, proto Protocol, cellW, cellH int) ([]byte, error) {
 		var buf bytes.Buffer
 		err := rasterm.SixelWriteImage(&buf, pal)
 		return buf.Bytes(), err
+	case ProtoQuadrant:
+		return []byte(quadrantRender(img)), nil
 	default:
 		return []byte(halfBlockRender(img)), nil
 	}
+}
+
+// quadrantChars maps a 4-bit mask of "which of the cell's 2×2 pixels take the
+// foreground colour" to the glyph that draws it. Bit 0 is top-left, 1
+// top-right, 2 bottom-left, 3 bottom-right.
+//
+// These are the legacy quadrant blocks from the DOS-era code page, so they
+// are present in essentially every monospace font — including Terminal.app's,
+// which advertises no image protocol at all.
+var quadrantChars = [16]rune{
+	' ', '▘', '▝', '▀',
+	'▖', '▌', '▞', '▛',
+	'▗', '▚', '▐', '▜',
+	'▄', '▙', '▟', '█',
+}
+
+// quadrantRender draws img at 2×2 pixels per character cell, twice the
+// horizontal detail of the half-block renderer for the same pane.
+//
+// A cell can carry only two colours, so for each 2×2 block it tries all 16
+// foreground/background partitions, takes the mean of each side, and keeps
+// whichever split has the least squared error. That is the whole trick: with
+// four pixels the search is exhaustive and still trivial.
+func quadrantRender(img image.Image) string {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	var out strings.Builder
+
+	var px [4][3]float64
+	for y := 0; y < h; y += 2 {
+		for x := 0; x < w; x += 2 {
+			for i, d := range [4][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}} {
+				sx, sy := min(x+d[0], w-1), min(y+d[1], h-1)
+				r, g, bl, _ := img.At(b.Min.X+sx, b.Min.Y+sy).RGBA()
+				px[i] = [3]float64{float64(r >> 8), float64(g >> 8), float64(bl >> 8)}
+			}
+
+			bestMask, bestErr := 0, math.Inf(1)
+			var bestFg, bestBg [3]float64
+			for mask := 0; mask < 16; mask++ {
+				fg, bg, nf, nb := [3]float64{}, [3]float64{}, 0, 0
+				for i := 0; i < 4; i++ {
+					if mask&(1<<i) != 0 {
+						addTo(&fg, px[i])
+						nf++
+					} else {
+						addTo(&bg, px[i])
+						nb++
+					}
+				}
+				divBy(&fg, nf)
+				divBy(&bg, nb)
+
+				var e float64
+				for i := 0; i < 4; i++ {
+					if mask&(1<<i) != 0 {
+						e += sqDist(px[i], fg)
+					} else {
+						e += sqDist(px[i], bg)
+					}
+				}
+				if e < bestErr {
+					bestMask, bestErr, bestFg, bestBg = mask, e, fg, bg
+				}
+			}
+
+			fmt.Fprintf(&out, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm%c",
+				int(bestFg[0]), int(bestFg[1]), int(bestFg[2]),
+				int(bestBg[0]), int(bestBg[1]), int(bestBg[2]),
+				quadrantChars[bestMask])
+		}
+		out.WriteString("\x1b[0m\n")
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+func addTo(dst *[3]float64, v [3]float64) {
+	for i := range dst {
+		dst[i] += v[i]
+	}
+}
+
+func divBy(dst *[3]float64, n int) {
+	if n == 0 {
+		return
+	}
+	for i := range dst {
+		dst[i] /= float64(n)
+	}
+}
+
+func sqDist(a, b [3]float64) float64 {
+	var s float64
+	for i := range a {
+		d := a[i] - b[i]
+		s += d * d
+	}
+	return s
 }
 
 func toPaletted(img image.Image) *image.Paletted {

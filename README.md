@@ -9,9 +9,9 @@ directories, and batch pull to a chosen destination.
 **Status: phase 3 complete.** Browse, search, select, transfer, and inline
 previews on cursor rest for images (jpeg/png/gif/dng), video (a still frame
 grabbed from a sparse head+tail reconstruction) and audio (waveform, ffprobe
-metadata, and playback with a full transport) — with a Unicode half-block
-fallback everywhere and a Kitty-protocol path for terminals that support it.
-Document previews land in phase 4.
+metadata, and playback with a full transport) — with quadrant-block rendering
+as a universal fallback and a Kitty-protocol path for terminals that support
+it. Document previews land in phase 4.
 
 ```
  1:Photos(10397)  2:Video(483)  3:Audio(125)  4:Docs(50)  5:All(11055)   R58M20XXXXX · sort:date · skip
@@ -77,15 +77,27 @@ scrub-through-voice-memos flow — and these are bound on top of the above:
 
 | Key | Action |
 |---|---|
-| `space` | play / pause (elsewhere it still toggles selection) |
+| `space` | play / pause. **`tab` still selects** — space is transport here and only here |
 | `h` `l` | seek ∓5 s |
 | `H` `L` | seek ∓30 s |
 | `[` `]` | playback speed, 0.5×–2× |
 
+In the **Video** tab, with `:set autoplay on`, the same keys scrub the frame
+the preview is grabbed from — a single still at 0:01 identifies some
+recordings and not others, so stepping through is what makes the preview
+usable for review:
+
+| Key | Action |
+|---|---|
+| `h` `l` | move the previewed frame ∓5 s |
+| `H` `L` | move the previewed frame ∓30 s |
+| `0` | back to 0:01 |
+
 Commands: `:dest <path>`, `:mkdir <name>`, `:sort date|name|size`,
 `:policy skip|overwrite|rename`, `:filter <q>`, `:bucket <name>` (`:buckets`
 browses every album/folder with counts), `:clear`, `:refresh`, `:pull`,
-`:set preview|autoplay|audio on|off`, `:q` `:q!` `:wq`. In command mode `tab`
+`:set preview|autoplay|audio on|off`, `:set render quadrant|halfblock`,
+`:q` `:q!` `:wq`. In command mode `tab`
 completes the command and its argument, and up/down walk this session's
 history.
 
@@ -99,7 +111,7 @@ and every tier degrades to a metadata card rather than failing.
 |---|---|
 | jpeg / png / gif | Go stdlib decode. 99.4% of the library. |
 | dng | embedded JPEG extracted from the TIFF container, pure Go |
-| video | still frame via sparse head+tail reconstruction (below); **off by default** — `:set autoplay on` |
+| video | still frame via sparse reconstruction (below), scrubbable with h/l; **off by default** — `:set autoplay on` |
 | audio | `showwavespic` waveform + `ffprobe` metadata, and the file is cached for playback |
 | heic, everything else | metadata card |
 
@@ -108,9 +120,33 @@ Video is gated behind `:set autoplay on` deliberately: a frame grab costs
 fight `j`/`k`. Off, a video row shows what MediaStore already knows, with no
 device round trip at all.
 
+**Preview quality is set by what the terminal can draw**, and the header shows
+which path you are on:
+
+| Renderer | Pixels per cell | Where |
+|---|---|---|
+| `kitty` / `iterm` / `sixel` | a real image | Ghostty, kitty, WezTerm, iTerm2 |
+| `quadrant` | 2×2, via `▘▝▀▖▌▞▛…` | the default fallback |
+| `halfblock` | 1×2, via `▀` | `:set render halfblock` |
+
+Quadrant blocks are the default where no image protocol exists: they are
+legacy code-page glyphs present in every monospace font, so compatibility is
+the same as half-blocks for twice the horizontal resolution. Each cell can
+carry only two colours, so the renderer tries all 16 foreground/background
+partitions of the 2×2 block and keeps the one with the least squared error.
+`:set render halfblock` reverts if a font draws them with gaps.
+
+None of that closes the gap with a graphics protocol. **If previews matter,
+run placer in Ghostty or kitty** — a third of a window is ~48×35 cells, which
+is ~96×70 pixels of quadrant blocks against a real image at Kitty-protocol
+resolution.
+
 Rendered previews cache to `~/.cache/placer/thumbs/`, keyed by
-path+size+date_added+pane size+protocol; pulled audio caches to
+path+size+date_added+pane size+protocol+frame; pulled audio caches to
 `~/.cache/placer/media/`, so pressing `space` after a preview is instant.
+The media cache holds whole audio files — voice memos on the reference device
+run 130–300 MB — so it is **capped at 2 GiB and pruned oldest-first at
+startup**; thumbs are capped at 256 MiB.
 
 Playback shells out to `ffplay` (or `mpv` if present, `afplay` as a macOS
 last resort) with the TUI owning the playhead — pause kills the process and
@@ -139,6 +175,11 @@ Measured against a Pixel 6a, and these numbers drove the design:
   read. Re-measured 2026-07-26 on the current largest video (1,735 MB /
   10m56s): **41.5 s full pull → 1.45 s sparse, 28.7× faster, byte-identical
   frame.**
+- **Scrubbing generalises the same trick.** h/l fetch a third region — a window
+  positioned from the bitrate around the seek point, backed off far enough to
+  include the preceding keyframe — alongside the header (ffmpeg needs `ftyp` at
+  offset 0 to identify the container at all) and the tail. A frame 10 minutes
+  into that 1,735 MB recording takes 2.9 s.
 - **The head is sized from the bitrate, not fixed.** A flat 4 MB head covers
   only 1.45 s of a 2.63 MB/s recording, which drops the decoder into the hole
   immediately after the wanted frame. It still produced a byte-identical frame,
