@@ -79,6 +79,12 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// ShellQuote is shellQuote for callers outside this package that build their
+// own device-side command lines — the sparse video `dd` in internal/preview
+// is the only one, and a filename with an apostrophe would otherwise break
+// out of the quoting and run as a separate command.
+func ShellQuote(s string) string { return shellQuote(s) }
+
 // buildQuery renders a `content query` invocation as ONE string.
 //
 // This must stay a single argument: `adb shell` re-joins argv and the device's

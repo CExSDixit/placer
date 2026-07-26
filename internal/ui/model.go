@@ -12,6 +12,7 @@ import (
 
 	"github.com/CExSDixit/placer/internal/device"
 	"github.com/CExSDixit/placer/internal/index"
+	"github.com/CExSDixit/placer/internal/player"
 	"github.com/CExSDixit/placer/internal/preview"
 	"github.com/CExSDixit/placer/internal/session"
 	"github.com/CExSDixit/placer/internal/transfer"
@@ -20,7 +21,23 @@ import (
 // previewDebounce is how long the cursor must rest before a preview fetch
 // starts — measured and specced: long enough that fast j/k scrolling never
 // triggers a fetch per row, short enough to feel immediate once it stops.
+// Audio autoplay rides the same debounce: scrubbing down a list of voice
+// memos with j/k must not spawn a pull and a process per row.
 const previewDebounce = 120 * time.Millisecond
+
+// playTickInterval is how often the playhead repaints while audio plays.
+const playTickInterval = 500 * time.Millisecond
+
+// maxCmdHistory caps the session's `:` history. Deep enough to arrow back to
+// anything from this sitting, shallow enough that it stays a list you can
+// scan rather than a log.
+const maxCmdHistory = 100
+
+// Seek steps, from the phase 1 normal-mode key table.
+const (
+	seekSmall = 5 * time.Second
+	seekLarge = 30 * time.Second
+)
 
 // previewState is what the preview pane renders. path identifies which file
 // it belongs to, so a stale in-flight result can never paint over the file
@@ -68,6 +85,12 @@ type Model struct {
 	visual         bool
 	anchor         int
 
+	// command-mode history, session-only. cmdHistIdx == len(cmdHistory) means
+	// "on the line being typed", which cmdDraft holds while arrowing back.
+	cmdHistory []string
+	cmdHistIdx int
+	cmdDraft   string
+
 	// selection review pane
 	selCursor, selOffset int
 
@@ -97,6 +120,15 @@ type Model struct {
 	preview       previewState
 	moveSeq       int
 	previewCancel context.CancelFunc
+
+	// audio playback. playGen invalidates an in-flight pull the same way
+	// moveSeq invalidates an in-flight preview fetch: a pull that finishes
+	// after the user has moved on must not start playing.
+	player     *player.Player
+	playGen    int
+	playErr    string
+	playLoad   string // name of the file being pulled before playback, "" if none
+	playCancel context.CancelFunc
 }
 
 func New(dev device.Device, proto preview.Protocol) Model {
@@ -113,6 +145,7 @@ func New(dev device.Device, proto preview.Protocol) Model {
 		w:       80,
 		h:       24,
 		proto:   proto,
+		player:  player.New(preview.Tool),
 	}
 }
 
@@ -126,11 +159,29 @@ type transferDoneMsg struct{}
 
 // previewDebounceMsg fires once the cursor has rested for previewDebounce.
 // If seq no longer matches the model's current moveSeq, the cursor moved
-// again during the wait and this fetch must not start.
+// again during the wait and this fetch must not start. fetch and audio say
+// which of the two debounced actions the rest was scheduled for — they are
+// independent (audio autoplay works with the preview pane off, and a video
+// preview happens with audio autoplay off).
 type previewDebounceMsg struct {
-	seq  int
-	path string
+	seq          int
+	path         string
+	fetch, audio bool
 }
+
+// audioReadyMsg carries a pulled audio file back for playback. A stale gen
+// means the cursor moved on, or the user stopped playback, while adb was
+// still copying.
+type audioReadyMsg struct {
+	gen   int
+	file  device.File
+	local string
+	at    time.Duration
+	err   error
+}
+
+// playTickMsg repaints the playhead while audio is playing.
+type playTickMsg struct{ gen int }
 
 // previewResultMsg carries a completed fetch back to Update. A stale seq
 // means the cursor moved on before this finished; it's discarded rather than
@@ -211,6 +262,29 @@ func (m *Model) previewCellSize() (int, int) {
 	return pw, m.listHeight()
 }
 
+// mediaMetaRows is how much of the pane the audio/video metadata card claims.
+// A photo gets the whole pane — its filename and size are already in the list
+// row — but "which take is this" for a video, and codec/bitrate/playhead for
+// audio, are worth more than the extra image rows.
+const mediaMetaRows = 9
+
+// previewCellSizeFor is previewCellSize with room reserved for the metadata
+// card that audio and video previews render beneath the image. It is what
+// sizes the fetch, so the cached render already fits — the cache key includes
+// the geometry, so the two must not disagree.
+func (m *Model) previewCellSizeFor(f device.File) (int, int) {
+	w, h := m.previewCellSize()
+	switch f.Kind() {
+	case device.KindVideo, device.KindAudio:
+		if h-mediaMetaRows > 4 {
+			h -= mediaMetaRows
+		} else {
+			h = max(4, h/2)
+		}
+	}
+	return w, h
+}
+
 // schedulePreview bumps moveSeq (invalidating any in-flight fetch) and
 // cancels it, then — if a file is under the cursor and previews are on —
 // schedules a debounced fetch for it. Called whenever a key could have
@@ -223,17 +297,47 @@ func (m *Model) schedulePreview() tea.Cmd {
 		m.previewCancel = nil
 	}
 
-	cellW, _ := m.previewCellSize()
 	f, ok := m.cur()
-	if !m.cfg.Preview || cellW == 0 || !ok || m.dev == nil {
+	if !ok || m.dev == nil {
 		m.preview = previewState{}
 		return nil
 	}
-
 	path := previewKeyFor(f)
-	m.preview = previewState{path: path, loading: true}
+
+	cellW, _ := m.previewCellSize()
+	fetch := m.cfg.Preview && cellW > 0
+
+	// Video is gated on autoplay, which defaults off: a frame grab costs
+	// ~1.2 s even with the sparse head+tail trick, so firing one on every
+	// cursor move would fight j/k. Off means a metadata card, built from the
+	// MediaStore row with no device round trip at all — exactly how heic has
+	// behaved since phase 2.
+	if fetch && f.Kind() == device.KindVideo && !m.cfg.Autoplay {
+		m.preview = previewState{path: path,
+			result: preview.MetaCard(f, "video — :set autoplay on to grab a frame")}
+		fetch = false
+	}
+
+	// The scrub-through-voice-memos flow: j/k in the Audio tab moves the
+	// cursor and plays what it lands on. Independent of the preview pane, so
+	// it still works with `:set preview off`.
+	audio := m.cfg.Audio && f.Kind() == device.KindAudio && m.player.Available()
+	if audio {
+		// Whatever was playing belongs to the row we just left.
+		m.stopPlayback()
+	}
+
+	if !fetch && !audio {
+		if m.preview.path != path {
+			m.preview = previewState{}
+		}
+		return nil
+	}
+	if fetch {
+		m.preview = previewState{path: path, loading: true}
+	}
 	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
-		return previewDebounceMsg{seq: seq, path: path}
+		return previewDebounceMsg{seq: seq, path: path, fetch: fetch, audio: audio}
 	})
 }
 
@@ -244,6 +348,54 @@ func (m *Model) cancelPreview() {
 		m.previewCancel()
 		m.previewCancel = nil
 	}
+}
+
+// stopPlayback kills any playing process and retires any in-flight pull.
+// Bumping playGen is what makes a pull that is already running land as a
+// stale audioReadyMsg instead of starting playback nobody asked for.
+func (m *Model) stopPlayback() {
+	m.playGen++
+	if m.playCancel != nil {
+		m.playCancel()
+		m.playCancel = nil
+	}
+	m.playLoad = ""
+	m.player.Stop()
+}
+
+// shutdown releases everything that outlives the TUI process otherwise: an
+// `adb pull` running for a preview, and an ffplay process still making noise.
+func (m *Model) shutdown() {
+	m.cancelPreview()
+	m.stopPlayback()
+}
+
+// loadAndPlay pulls f into the media cache (a no-op when the preview fetch
+// already cached it, which is the common case) and hands it to the player.
+func (m *Model) loadAndPlay(f device.File, gen int, at time.Duration) tea.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	m.playCancel = cancel
+	m.playLoad = f.Name
+	m.playErr = ""
+	dev := m.dev
+	return func() tea.Msg {
+		local, err := preview.EnsureLocal(ctx, dev, f)
+		return audioReadyMsg{gen: gen, file: f, local: local, at: at, err: err}
+	}
+}
+
+func playTick(gen int) tea.Cmd {
+	return tea.Tick(playTickInterval, func(time.Time) tea.Msg { return playTickMsg{gen: gen} })
+}
+
+// playCurrent starts (or restarts) playback of the file under the cursor.
+func (m *Model) playCurrent(at time.Duration) tea.Cmd {
+	f, ok := m.cur()
+	if !ok || !m.player.Available() {
+		return nil
+	}
+	m.stopPlayback()
+	return m.loadAndPlay(f, m.playGen, at)
 }
 
 // curPreviewKey identifies the file the preview pane should be showing right
@@ -340,17 +492,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok || previewKeyFor(f) != msg.path {
 			return m, nil
 		}
-		cellW, cellH := m.previewCellSize()
-		if cellW == 0 {
-			return m, nil
+		var cmds []tea.Cmd
+		if msg.audio {
+			m.playGen++
+			cmds = append(cmds, m.loadAndPlay(f, m.playGen, 0))
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		m.previewCancel = cancel
-		dev, proto, seq := m.dev, m.proto, msg.seq
-		return m, func() tea.Msg {
-			res, err := preview.Fetch(ctx, dev, f, cellW, cellH, proto)
-			return previewResultMsg{seq: seq, result: res, err: err}
+		if msg.fetch {
+			cellW, cellH := m.previewCellSizeFor(f)
+			if cellW > 0 {
+				ctx, cancel := context.WithCancel(context.Background())
+				m.previewCancel = cancel
+				dev, proto, seq := m.dev, m.proto, msg.seq
+				cmds = append(cmds, func() tea.Msg {
+					res, err := preview.Fetch(ctx, dev, f, cellW, cellH, proto)
+					return previewResultMsg{seq: seq, result: res, err: err}
+				})
+			}
 		}
+		return m, tea.Batch(cmds...)
 
 	case previewResultMsg:
 		if msg.seq != m.moveSeq {
@@ -360,6 +519,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preview.loading = false
 		m.preview.result = msg.result
 		m.preview.err = msg.err
+		return m, nil
+
+	case audioReadyMsg:
+		if msg.gen != m.playGen {
+			return m, nil // stale — playback was stopped or moved on mid-pull
+		}
+		m.playCancel = nil
+		m.playLoad = ""
+		if msg.err != nil {
+			m.playErr = msg.err.Error()
+			return m, nil
+		}
+		// ffprobe's container duration beats MediaStore's when the preview
+		// pane already measured one — the playhead and the end-of-track stop
+		// both key off it.
+		dur := msg.file.Duration
+		if r := m.preview.result; r.Duration > 0 && m.preview.path == previewKeyFor(msg.file) {
+			dur = r.Duration
+		}
+		m.player.Play(previewKeyFor(msg.file), msg.file.Name, msg.local, dur, msg.at)
+		return m, playTick(msg.gen)
+
+	case playTickMsg:
+		if msg.gen != m.playGen {
+			return m, nil
+		}
+		if m.player.Playing() {
+			return m, playTick(msg.gen)
+		}
+		// One final tick after the process exits, so the footer repaints from
+		// "playing" to "paused" without waiting for the next keystroke.
 		return m, nil
 	}
 
@@ -429,7 +619,23 @@ func (m Model) handleKey(km tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeNormal
 			m.input.Blur()
 			m.input.SetValue("")
+			m.pushHistory(cmdline)
+			m.cmdHistIdx = len(m.cmdHistory)
 			return m.runCommand(cmdline)
+		case "tab":
+			line, hint := m.completeCommand(m.input.Value())
+			m.input.SetValue(line)
+			m.input.CursorEnd()
+			if hint != "" {
+				return m, m.setStatus(hint)
+			}
+			return m, nil
+		case "up":
+			m.historyStep(-1)
+			return m, nil
+		case "down":
+			m.historyStep(1)
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(km)
@@ -504,6 +710,15 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Transport keys live in the Audio tab only. Elsewhere they stay free for
+	// list navigation, and space keeps meaning "select" — the binding it has
+	// had since phase 1 everywhere else in the app.
+	if m.tab == index.TabAudio && m.player.Available() {
+		if handled, cmd := m.handleTransportKey(k); handled {
+			return m, cmd
+		}
+	}
+
 	n := len(m.view.Files)
 
 	switch k {
@@ -511,12 +726,12 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		if m.man.Len() > 0 {
 			return m, m.setStatus(fmt.Sprintf("%d file(s) selected — :q! to discard, p to pull, s to review", m.man.Len()))
 		}
-		m.cancelPreview()
+		m.shutdown()
 		m.quit = true
 		return m, tea.Quit
 	case "ctrl+c":
 		_ = m.man.Save(session.ManifestPath())
-		m.cancelPreview()
+		m.shutdown()
 		m.quit = true
 		return m, tea.Quit
 
@@ -627,6 +842,8 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		m.mode = modeCommand
 		m.input.SetValue("")
 		m.input.Focus()
+		m.cmdHistIdx = len(m.cmdHistory)
+		m.cmdDraft = ""
 		return m, textinput.Blink
 	case "?":
 		m.prev = m.mode
@@ -664,6 +881,52 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		m.clampOffset()
 	}
 	return m, nil
+}
+
+// handleTransportKey implements the Audio tab's playback controls. It reports
+// whether it consumed the key, so anything it doesn't claim falls through to
+// the normal-mode keymap unchanged.
+//
+// The playhead lives here, not in the player process: pause kills ffplay and
+// remembers the offset, seek kills it and restarts with a new -ss. Crude, but
+// it needs no platform-specific code and no pure-Go decoder — which would
+// have meant CGO, which placer does not do.
+func (m *Model) handleTransportKey(k string) (bool, tea.Cmd) {
+	switch k {
+	case " ":
+		f, ok := m.cur()
+		if !ok {
+			return true, nil
+		}
+		// Space on a different file loads it; space on the loaded one is
+		// play/pause.
+		if loaded, _ := m.player.Loaded(); loaded != previewKeyFor(f) {
+			return true, m.playCurrent(0)
+		}
+		if m.player.Toggle() {
+			return true, playTick(m.playGen)
+		}
+		return true, nil
+
+	case "h", "left":
+		m.player.Seek(-seekSmall)
+	case "l", "right":
+		m.player.Seek(seekSmall)
+	case "H":
+		m.player.Seek(-seekLarge)
+	case "L":
+		m.player.Seek(seekLarge)
+	case "[":
+		return true, m.setStatus(fmt.Sprintf("speed %.2fx", m.player.AdjustSpeed(-player.SpeedStep)))
+	case "]":
+		return true, m.setStatus(fmt.Sprintf("speed %.2fx", m.player.AdjustSpeed(player.SpeedStep)))
+	default:
+		return false, nil
+	}
+	if m.player.Playing() {
+		return true, playTick(m.playGen)
+	}
+	return true, nil
 }
 
 func (m *Model) rangeBounds() (int, int) {
@@ -788,18 +1051,18 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		if m.man.Len() > 0 {
 			return m, m.setStatus(fmt.Sprintf("%d selected — :q! to discard", m.man.Len()))
 		}
-		m.cancelPreview()
+		m.shutdown()
 		m.quit = true
 		return m, tea.Quit
 	case "q!":
 		m.man.Clear()
 		_ = m.man.Save(session.ManifestPath())
-		m.cancelPreview()
+		m.shutdown()
 		m.quit = true
 		return m, tea.Quit
 	case "wq":
 		_ = m.man.Save(session.ManifestPath())
-		m.cancelPreview()
+		m.shutdown()
 		m.quit = true
 		return m, tea.Quit
 	case "dest":
@@ -916,13 +1179,19 @@ func (m Model) runSet(arg string) (tea.Model, tea.Cmd) {
 		return m, m.setStatus(errStyle.Render("unknown setting: " + fields[0]))
 	}
 	_ = m.cfg.Save()
+
+	// Every toggle takes effect on the file already under the cursor, without
+	// waiting for a move: `:set autoplay on` should grab the frame for the
+	// video you are looking at, and `:set audio off` should stop the memo
+	// currently playing.
 	var pcmd tea.Cmd
-	if fields[0] == "preview" {
-		if on {
-			pcmd = m.schedulePreview()
-		} else {
-			m.preview = previewState{}
-		}
+	switch {
+	case fields[0] == "audio" && !on:
+		m.stopPlayback()
+	case !on && fields[0] == "preview":
+		m.preview = previewState{}
+	default:
+		pcmd = m.schedulePreview()
 	}
 	return m, tea.Batch(pcmd, m.setStatus(fmt.Sprintf("%s: %s", fields[0], fields[1])))
 }

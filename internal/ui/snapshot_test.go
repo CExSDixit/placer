@@ -26,6 +26,7 @@ func TestSnapshot(t *testing.T) {
 		{"search", []string{"/", "s", "c", "r", "e", "e", "n"}},
 		{"visual", []string{"j", "v", "j", "j"}},
 		{"selected", []string{"tab", "tab", "tab"}},
+		{"video-tab", []string{"2"}}, // metadata card: autoplay defaults off
 		{"audio-tab", []string{"3"}},
 		{"selection-pane", []string{"tab", "tab", "s"}},
 		{"destination", []string{"d"}},

@@ -16,14 +16,18 @@ import (
 	"github.com/CExSDixit/placer/internal/device"
 )
 
-// CacheDir is where rendered thumbnails live, keyed so a file is never
-// re-fetched or re-decoded across restarts.
-func CacheDir() string {
+func cacheRoot() string {
 	d, err := os.UserCacheDir()
 	if err != nil {
 		return ".placer-cache"
 	}
-	return filepath.Join(d, "placer", "thumbs")
+	return filepath.Join(d, "placer")
+}
+
+// CacheDir is where rendered thumbnails live, keyed so a file is never
+// re-fetched or re-decoded across restarts.
+func CacheDir() string {
+	return filepath.Join(cacheRoot(), "thumbs")
 }
 
 // cacheKey is path + size + date_added + cell geometry + protocol: any of

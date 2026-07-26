@@ -3,10 +3,13 @@ package device
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -70,7 +73,62 @@ func (f *Fake) ExecOut(ctx context.Context, cmd string) ([]byte, error) {
 		return nil, ctx.Err()
 	case <-time.After(f.Latency):
 	}
+	if out, ok, err := f.fakeDD(cmd); ok {
+		return out, err
+	}
 	return nil, fmt.Errorf("fake: ExecOut not implemented for %q", cmd)
+}
+
+// ddRe matches the `dd` invocations the sparse video preview issues:
+//
+//	dd if='<path>' bs=<n> count=<n> 2>/dev/null
+//	dd if='<path>' bs=<n> skip=<n> 2>/dev/null
+//
+// Reproducing them against SrcDir is what lets the head+tail reconstruction —
+// the one place where an offset error silently yields a corrupt frame rather
+// than an error — be tested with no phone attached.
+var ddRe = regexp.MustCompile(`^dd if='(.*)' bs=(\d+)(?: count=(\d+))?(?: skip=(\d+))? 2>/dev/null$`)
+
+func (f *Fake) fakeDD(cmd string) ([]byte, bool, error) {
+	m := ddRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return nil, false, nil
+	}
+	if f.SrcDir == "" {
+		return nil, true, fmt.Errorf("fake: dd needs SrcDir")
+	}
+	fh, err := os.Open(filepath.Join(f.SrcDir, filepath.Base(m[1])))
+	if err != nil {
+		return nil, true, err
+	}
+	defer fh.Close()
+
+	bs, _ := strconv.ParseInt(m[2], 10, 64)
+	if skip := m[4]; skip != "" {
+		n, _ := strconv.ParseInt(skip, 10, 64)
+		if _, err := fh.Seek(n*bs, io.SeekStart); err != nil {
+			return nil, true, err
+		}
+	}
+	// `2>/dev/null` on the device is what keeps dd's "4+0 records in" summary
+	// out of the payload — adb exec-out folds device stderr into stdout, and
+	// real hardware appends exactly 78 bytes without it. The fake emits the
+	// payload alone, matching the corrected command.
+	if count := m[3]; count != "" {
+		n, _ := strconv.ParseInt(count, 10, 64)
+		return readFull(fh, n*bs)
+	}
+	b, err := io.ReadAll(fh)
+	return b, true, err
+}
+
+func readFull(r io.Reader, n int64) ([]byte, bool, error) {
+	buf := make([]byte, n)
+	got, err := io.ReadFull(r, buf)
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil // a short read at EOF is exactly what dd does
+	}
+	return buf[:got], true, err
 }
 
 func (f *Fake) Pull(ctx context.Context, remote, local string, prog func(Progress)) error {

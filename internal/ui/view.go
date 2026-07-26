@@ -89,42 +89,95 @@ func (m Model) previewPaneView(pw, height int) string {
 		return strings.Join(lines, "\n")
 	}
 
+	// write puts plain-text rows into the pane starting at row `from`,
+	// stopping at the pane's height.
+	write := func(from int, rows []string) int {
+		for _, r := range rows {
+			if from >= height {
+				break
+			}
+			lines[from] = r
+			from++
+		}
+		return from
+	}
 	fill := func(s string) {
 		for i := 1; i < height; i++ {
 			lines[i] = ""
 		}
 		lines[1] = s
 	}
+	metaRows := func() []string {
+		out := make([]string, 0, len(m.preview.result.Meta))
+		for _, l := range m.preview.result.Meta {
+			out = append(out, dimStyle.Render(pad(trunc(l, pw), pw)))
+		}
+		return out
+	}
 
+	res := m.preview.result
 	switch {
 	case m.preview.loading:
 		fill(dimStyle.Render(pad("loading…", pw)))
 	case m.preview.err != nil:
 		fill(errStyle.Render(pad(trunc(m.preview.err.Error(), pw), pw)))
-	case m.preview.result.Tier == preview.TierMeta:
-		note := m.preview.result.Note
-		if note == "" {
-			note = "no preview for this file"
+
+	case res.Tier == preview.TierMeta:
+		// The metadata card: whatever MediaStore knows, plus the reason there
+		// is no image — heic, ffmpeg missing, or video autoplay off.
+		for i := 1; i < height; i++ {
+			lines[i] = ""
 		}
-		fill(dimStyle.Render(pad(trunc(note, pw), pw)))
-	case len(m.preview.result.Rendered) == 0:
+		row := 1
+		if note := res.Note; note != "" {
+			row = write(row, []string{dimStyle.Render(pad(trunc(note, pw), pw)), ""})
+		}
+		write(row, metaRows())
+
+	case len(res.Rendered) == 0:
 		fill(dimStyle.Render(pad("no preview", pw)))
+
 	case m.proto == preview.ProtoHalfBlock:
-		imgLines := strings.Split(string(m.preview.result.Rendered), "\n")
-		for j := 0; j < height-1; j++ {
-			if j < len(imgLines) {
-				lines[1+j] = imgLines[j]
-			} else {
-				lines[1+j] = ""
+		for i := 1; i < height; i++ {
+			lines[i] = ""
+		}
+		imgLines := strings.Split(string(res.Rendered), "\n")
+		row := write(1, imgLines)
+		// Audio and video previews carry a metadata card under the image;
+		// there is more worth saying about them than about a photo.
+		if len(res.Meta) > 0 && row+1 < height {
+			write(row+1, metaRows())
+		}
+
+	default:
+		// The image itself is placed via graphicsOverlay at the same row/col
+		// this line would occupy; left blank here so we don't print ordinary
+		// text over where the terminal is about to draw it. Metadata still
+		// goes in as text, below the space the image will occupy.
+		for i := 1; i < height; i++ {
+			lines[i] = ""
+		}
+		if len(res.Meta) > 0 {
+			row := 1 + m.overlayRows()
+			if row+1 < height {
+				write(row+1, metaRows())
 			}
 		}
-	default:
-		// Placed via graphicsOverlay at the same row/col this line would
-		// occupy; left blank here so we don't print ordinary text over
-		// where the terminal is about to draw the image.
-		fill("")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// overlayRows is how many character rows a graphics-protocol image occupies,
+// so the metadata card lands beneath it rather than underneath it. It must
+// agree with the cellH the fetch was sized at, which is why both go through
+// previewCellSizeFor.
+func (m Model) overlayRows() int {
+	f, ok := m.cur()
+	if !ok {
+		return m.listHeight()
+	}
+	_, h := m.previewCellSizeFor(f)
+	return h
 }
 
 // graphicsOverlay emits a Kitty/iTerm/sixel image via absolute cursor
@@ -146,7 +199,7 @@ func (m Model) graphicsOverlay() string {
 	if m.preview.loading || m.preview.err != nil || len(res.Rendered) == 0 {
 		return ""
 	}
-	if res.Tier != preview.TierImage && res.Tier != preview.TierDNG {
+	if !res.HasImage() {
 		return ""
 	}
 	// header() is always exactly 2 lines; bodyView's first line is the pane
@@ -492,6 +545,11 @@ func (m Model) footer() string {
 	if m.errMsg != "" {
 		return errStyle.Render(trunc(m.errMsg, m.w))
 	}
+	// The transport line outranks the status message: while something is
+	// playing, the playhead is the most useful thing this row can carry.
+	if line := m.transportLine(); line != "" {
+		return trunc(line, m.w)
+	}
 	if m.status != "" {
 		return trunc(m.status, m.w)
 	}
@@ -508,6 +566,35 @@ func (m Model) footer() string {
 	return dimStyle.Render(trunc(hint, m.w))
 }
 
+// transportLine is the audio playhead: what is loaded, where it is, and at
+// what speed. Empty when nothing is loaded, so it costs no screen row in the
+// 99% of the app that isn't the Audio tab.
+func (m Model) transportLine() string {
+	if m.playErr != "" {
+		return errStyle.Render("playback: " + m.playErr)
+	}
+	if m.playLoad != "" {
+		return dimStyle.Render("⏳ " + trunc(m.playLoad, max(10, m.w-20)))
+	}
+	_, name := m.player.Loaded()
+	if name == "" {
+		return ""
+	}
+	icon := "⏸"
+	if m.player.Playing() {
+		icon = "▶"
+	}
+	pos := preview.FormatPosition(m.player.Position(), m.player.Duration())
+	speed := ""
+	if s := m.player.Speed(); s != 1 {
+		speed = fmt.Sprintf(" · %.2fx", s)
+	}
+	tail := fmt.Sprintf(" %s%s  %s", pos, speed,
+		dimStyle.Render("space play/pause · h/l ±5s · H/L ±30s · [/] speed"))
+	nameW := max(10, m.w-lipgloss.Width(tail)-4)
+	return selectedStyle.Render(icon) + " " + trunc(name, nameW) + tail
+}
+
 func (m Model) helpView() string {
 	rows := [][2]string{
 		{"j / k", "down / up"},
@@ -520,6 +607,10 @@ func (m Model) helpView() string {
 		{"ctrl+x", "clear all visible from selection"},
 		{"*", "select everything matching the current filter"},
 		{"y", "add to selection without toggling"},
+		{"space (Audio tab)", "play / pause the file under the cursor"},
+		{"h / l (Audio tab)", "seek ∓5s"},
+		{"H / L (Audio tab)", "seek ∓30s"},
+		{"[ / ] (Audio tab)", "playback speed down / up (0.5x–2x)"},
 		{"s", "selection review (d removes, c clears)"},
 		{"d", "destination picker"},
 		{"p", "pull selection to destination"},
@@ -540,9 +631,11 @@ func (m Model) helpView() string {
 		{":refresh", "re-index"},
 		{":pull", "start transfer"},
 		{":set preview on|off", "toggle image preview on cursor rest"},
-		{":set autoplay on|off", "toggle video frame-grab autoplay"},
-		{":set audio on|off", "toggle audio auto-play (phase 3)"},
+		{":set autoplay on|off", "video frame grab on cursor rest (default off)"},
+		{":set audio on|off", "audio auto-play on j/k in the Audio tab"},
 		{":q / :q! / :wq", "quit / discard / save"},
+		{"tab (in :)", "complete the command or its argument"},
+		{"up / down (in :)", "walk this session's command history"},
 	}
 
 	var b strings.Builder
