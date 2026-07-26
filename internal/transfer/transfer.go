@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
+	"github.com/mishrasidhant/placer/internal/device"
 )
 
 // Policy decides what happens when the destination file already exists.

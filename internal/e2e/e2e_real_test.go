@@ -1,7 +1,7 @@
 // Package e2e holds tests that require a real attached device. They are gated
-// behind ADBFZ_DEVICE=1 so the normal suite stays hardware-free.
+// behind PLACER_DEVICE=1 so the normal suite stays hardware-free.
 //
-//	ADBFZ_DEVICE=1 go test ./internal/e2e -v
+//	PLACER_DEVICE=1 go test ./internal/e2e -v
 package e2e
 
 import (
@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
-	"github.com/mishrasidhant/adbfz/internal/index"
-	"github.com/mishrasidhant/adbfz/internal/transfer"
+	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/mishrasidhant/placer/internal/index"
+	"github.com/mishrasidhant/placer/internal/transfer"
 )
 
 func realDevice(t *testing.T) device.Device {
 	t.Helper()
-	if os.Getenv("ADBFZ_DEVICE") == "" {
-		t.Skip("set ADBFZ_DEVICE=1 with a device attached")
+	if os.Getenv("PLACER_DEVICE") == "" {
+		t.Skip("set PLACER_DEVICE=1 with a device attached")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

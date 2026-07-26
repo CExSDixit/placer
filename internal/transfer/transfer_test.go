@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
+	"github.com/mishrasidhant/placer/internal/device"
 )
 
 // stub is a minimal Device: it writes exactly the bytes it is told to, so the

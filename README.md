@@ -1,4 +1,7 @@
-# adbfz
+# placer
+
+*A placer deposit is a sediment bed you pan through to find the few nuggets worth
+keeping. That's the workflow: 11,000 files in, a handful out.*
 
 Fuzzy-searchable ADB file browser with vim keybindings, multi-select across
 directories, and batch pull to a chosen destination.
@@ -28,7 +31,7 @@ Two external dependencies, and only the first is required:
 brew install android-platform-tools ffmpeg          # macOS
 sudo apt install android-sdk-platform-tools ffmpeg  # Linux
 
-go build -o adbfz . && mv adbfz ~/.local/bin/
+go build -o placer . && mv placer ~/.local/bin/
 ```
 
 The binary is fully static and CGO-free on darwin/{arm64,amd64} and
@@ -37,10 +40,10 @@ linux/{amd64,arm64} — `make release` builds all four.
 ## Usage
 
 ```sh
-adbfz                        # the attached device
-adbfz -s 23311JEGR07766      # a specific device
-adbfz -fake                  # synthetic library, no device needed
-adbfz -fixtures testdata/fixtures
+placer                        # the attached device
+placer -s 23311JEGR07766      # a specific device
+placer -fake                  # synthetic library, no device needed
+placer -fixtures testdata/fixtures
 ```
 
 ### Keys
@@ -68,7 +71,7 @@ Commands: `:dest <path>`, `:mkdir <name>`, `:sort date|name|size`,
 `:q` `:q!` `:wq`.
 
 Selection is a **manifest**, independent of tab, filter and directory — it
-survives all navigation and is persisted to `~/.cache/adbfz/session.json`, so a
+survives all navigation and is persisted to `~/.cache/placer/session.json`, so a
 crash never loses curation work.
 
 ## Design notes
@@ -104,7 +107,7 @@ make run                 # synthetic library shaped like the real Pixel 6a
 make test                # unit tests
 make check               # vet + test + race + gofmt
 make fixtures            # record real device output (device required)
-ADBFZ_SNAPSHOT=1 go test ./internal/ui -run TestSnapshot -v   # eyeball screens
+PLACER_SNAPSHOT=1 go test ./internal/ui -run TestSnapshot -v   # eyeball screens
 ```
 
 `internal/device/parse.go` is the highest-risk code in the project: `content
@@ -125,4 +128,4 @@ cmd/capture-fixtures/       record real device output for offline dev
 ```
 
 Full spec and phasing: `~/git/cookbooks/rabbitholes/`
-(`adb-fuzzy-file-browser-implementation-scope.md`, `adbfz-build-handoff.md`).
+(`adb-fuzzy-file-browser-implementation-scope.md`, `placer-build-handoff.md`).

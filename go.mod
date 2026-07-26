@@ -1,4 +1,4 @@
-module github.com/mishrasidhant/adbfz
+module github.com/mishrasidhant/placer
 
 go 1.26.5
 

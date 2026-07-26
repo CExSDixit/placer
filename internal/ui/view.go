@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
-	"github.com/mishrasidhant/adbfz/internal/index"
-	"github.com/mishrasidhant/adbfz/internal/transfer"
+	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/mishrasidhant/placer/internal/index"
+	"github.com/mishrasidhant/placer/internal/transfer"
 )
 
 func (m Model) View() string {
@@ -369,7 +369,7 @@ func (m Model) helpView() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(" adbfz — keys ") + "\n\n")
+	b.WriteString(titleStyle.Render(" placer — keys ") + "\n\n")
 	for _, r := range rows {
 		b.WriteString(fmt.Sprintf("  %s %s\n", promptStyle.Render(pad(r[0], 18)), r[1]))
 	}

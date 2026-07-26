@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
+	"github.com/mishrasidhant/placer/internal/device"
 )
 
 func main() {
@@ -53,5 +53,5 @@ func main() {
 		rows := device.ParseRows(string(raw), q.Projection)
 		fmt.Printf("  %-10s %6d rows  %8d bytes  -> %s\n", name, len(rows), len(raw), path)
 	}
-	fmt.Println("\nRun the TUI against these with:  adbfz -fixtures", *out)
+	fmt.Println("\nRun the TUI against these with:  placer -fixtures", *out)
 }

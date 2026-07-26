@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
-	"github.com/mishrasidhant/adbfz/internal/index"
-	"github.com/mishrasidhant/adbfz/internal/session"
-	"github.com/mishrasidhant/adbfz/internal/transfer"
+	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/mishrasidhant/placer/internal/index"
+	"github.com/mishrasidhant/placer/internal/session"
+	"github.com/mishrasidhant/placer/internal/transfer"
 )
 
 type mode int

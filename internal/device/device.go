@@ -1,6 +1,6 @@
 // Package device abstracts every interaction with the Android device.
 //
-// Everything the rest of adbfz does goes through the Device interface, so the
+// Everything the rest of placer does goes through the Device interface, so the
 // TUI, indexer and transfer engine can be developed and tested against a
 // fixture-backed fake with no phone attached. The real ADB implementation is
 // deliberately thin: it is the only part that needs hardware to verify.
@@ -138,7 +138,7 @@ type Progress struct {
 	Err     error
 }
 
-// Device is the whole surface adbfz needs from a phone.
+// Device is the whole surface placer needs from a phone.
 type Device interface {
 	// Serial identifies the device, e.g. "23311JEGR07766".
 	Serial() string

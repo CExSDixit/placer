@@ -1,10 +1,10 @@
-BINARY := adbfz
+BINARY := placer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 TARGETS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
 # Every target builds with CGO_ENABLED=0. This is a hard constraint, not a
-# preference: it is what keeps adbfz a single static binary that cross-compiles
+# preference: it is what keeps placer a single static binary that cross-compiles
 # with no C toolchain. Any dependency that breaks it is rejected.
 export CGO_ENABLED=0
 

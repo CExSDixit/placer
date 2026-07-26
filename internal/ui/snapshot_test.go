@@ -11,8 +11,8 @@ import (
 //
 //	go test ./internal/ui -run TestSnapshot -v
 func TestSnapshot(t *testing.T) {
-	if os.Getenv("ADBFZ_SNAPSHOT") == "" {
-		t.Skip("set ADBFZ_SNAPSHOT=1 to dump rendered screens")
+	if os.Getenv("PLACER_SNAPSHOT") == "" {
+		t.Skip("set PLACER_SNAPSHOT=1 to dump rendered screens")
 	}
 	base := newTestModel(t)
 	next, _ := base.Update(tea.WindowSizeMsg{Width: 110, Height: 22})

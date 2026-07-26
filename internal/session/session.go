@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
+	"github.com/mishrasidhant/placer/internal/device"
 )
 
 // Manifest is the set of files chosen for transfer. It is keyed by device
@@ -132,9 +132,9 @@ type Config struct {
 func CacheDir() string {
 	d, err := os.UserCacheDir()
 	if err != nil {
-		return ".adbfz"
+		return ".placer"
 	}
-	return filepath.Join(d, "adbfz")
+	return filepath.Join(d, "placer")
 }
 
 func ConfigPath() string   { return filepath.Join(CacheDir(), "config.json") }

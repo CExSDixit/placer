@@ -1,4 +1,4 @@
-// adbfz — fuzzy-searchable ADB file browser with multi-select and batch pull.
+// placer — fuzzy-searchable ADB file browser with multi-select and batch pull.
 //
 // Phase 1: browse, search, select, transfer. Previews land in phase 2.
 package main
@@ -12,8 +12,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/mishrasidhant/adbfz/internal/device"
-	"github.com/mishrasidhant/adbfz/internal/ui"
+	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/mishrasidhant/placer/internal/ui"
 )
 
 var version = "0.1.0-phase1"
@@ -29,19 +29,19 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println("adbfz", version)
+		fmt.Println("placer", version)
 		return
 	}
 
 	dev, err := open(*fake, *fixtures, *adbBin, *serial)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "adbfz:", err)
+		fmt.Fprintln(os.Stderr, "placer:", err)
 		os.Exit(1)
 	}
 
 	p := tea.NewProgram(ui.New(dev), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "adbfz:", err)
+		fmt.Fprintln(os.Stderr, "placer:", err)
 		os.Exit(1)
 	}
 }

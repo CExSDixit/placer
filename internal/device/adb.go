@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// ADB drives the system `adb` binary. This is the only part of adbfz that
+// ADB drives the system `adb` binary. This is the only part of placer that
 // needs real hardware to verify, so it is kept as thin as possible.
 type ADB struct {
 	Bin    string // defaults to "adb"
