@@ -1,6 +1,7 @@
 // placer — fuzzy-searchable ADB file browser with multi-select and batch pull.
 //
-// Phase 1: browse, search, select, transfer. Previews land in phase 2.
+// Browse, search, select, transfer, and preview images, video frames and audio
+// waveforms inline. Document previews land in phase 4.
 package main
 
 import (
@@ -17,7 +18,7 @@ import (
 	"github.com/CExSDixit/placer/internal/ui"
 )
 
-var version = "0.2.0-phase2"
+var version = "0.3.0-phase3"
 
 func main() {
 	var (
