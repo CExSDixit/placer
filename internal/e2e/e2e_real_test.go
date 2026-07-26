@@ -56,7 +56,7 @@ func TestRealIndexLoad(t *testing.T) {
 
 	// Fuzzy filtering must be local and therefore fast.
 	fstart := time.Now()
-	v := ix.Build(index.TabPhotos, "camera", index.SortDate)
+	v := ix.Build(index.TabPhotos, "", "camera", index.SortDate)
 	t.Logf("fuzzy filter over %d photos -> %d matches in %s",
 		c[index.TabPhotos], len(v.Files), time.Since(fstart).Round(time.Microsecond))
 	if time.Since(fstart) > 500*time.Millisecond {
@@ -72,7 +72,7 @@ func TestRealPullSetsMtime(t *testing.T) {
 	defer cancel()
 
 	ix, _ := index.Load(ctx, dev)
-	view := ix.Build(index.TabPhotos, "", index.SortDate)
+	view := ix.Build(index.TabPhotos, "", "", index.SortDate)
 
 	// Smallest few files with a real capture time, to keep this cheap.
 	var picked []device.File
@@ -140,7 +140,7 @@ func TestRealExecOutIsBinaryClean(t *testing.T) {
 	defer cancel()
 
 	ix, _ := index.Load(ctx, dev)
-	view := ix.Build(index.TabPhotos, "", index.SortDate)
+	view := ix.Build(index.TabPhotos, "", "", index.SortDate)
 
 	var target device.File
 	for _, f := range view.Files {

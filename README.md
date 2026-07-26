@@ -6,8 +6,10 @@ keeping. That's the workflow: 11,000 files in, a handful out.*
 Fuzzy-searchable ADB file browser with vim keybindings, multi-select across
 directories, and batch pull to a chosen destination.
 
-**Status: phase 1 complete.** Browse, search, select, transfer. Previews
-(photo/video/audio/documents) land in phases 2–4.
+**Status: phase 2 complete.** Browse, search, select, transfer, and inline
+image previews (jpeg/png/gif/dng) on cursor rest, with a Unicode half-block
+fallback everywhere and a Kitty-protocol path for terminals that support it.
+Video/audio previews and document previews land in phases 3–4.
 
 ```
  1:Photos(10397)  2:Video(483)  3:Audio(125)  4:Docs(50)  5:All(11055)   R58M20XXXXX · sort:date · skip
@@ -55,20 +57,31 @@ placer -fixtures testdata/fixtures
 | `ctrl+d` `ctrl+u` | half page |
 | `1`–`5`, `gt` `gT` | switch tab |
 | `tab` `space` | toggle selection |
-| `v` | visual mode (`j`/`k` extends, `tab` toggles the range) |
-| `V` | select all visible |
+| `v` `V` | anchor a range at the cursor (`j`/`k` extends, any select key commits) |
+| `ctrl+a` / `ctrl+x` | select / clear all visible |
+| `*` | select everything matching the current filter |
 | `y` | add to selection without toggling |
 | `s` | selection review (`d` removes, `c` clears) |
 | `d` | destination picker |
 | `p` | pull selection |
 | `/` | fuzzy search (`esc` keeps the filter, `ctrl+c` clears) |
+| `B` | quick Camera-only bucket toggle |
 | `r` | re-index |
 | `?` | help |
 | `q` | quit (guards a non-empty selection) |
 
 Commands: `:dest <path>`, `:mkdir <name>`, `:sort date|name|size`,
-`:policy skip|overwrite|rename`, `:filter <q>`, `:clear`, `:refresh`, `:pull`,
-`:q` `:q!` `:wq`.
+`:policy skip|overwrite|rename`, `:filter <q>`, `:bucket <name>` (`:buckets`
+browses every album/folder with counts), `:clear`, `:refresh`, `:pull`,
+`:set preview|autoplay|audio on|off`, `:q` `:q!` `:wq`.
+
+Image previews render on cursor rest, debounced ~120ms and cancelled the
+moment the cursor moves. jpeg/png/gif decode via Go's stdlib; dng previews
+are extracted pure Go from the embedded JPEG in the TIFF container; heic
+shows a metadata card (no pure-Go decoder, not worth a dependency for a
+handful of files). Cached to `~/.cache/placer/thumbs/`, keyed by
+path+size+date_added+pane size+protocol, so nothing is ever re-fetched or
+re-rendered needlessly.
 
 Selection is a **manifest**, independent of tab, filter and directory — it
 survives all navigation and is persisted to `~/.cache/placer/session.json`, so a

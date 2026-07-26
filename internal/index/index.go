@@ -154,17 +154,66 @@ func haystack(f device.File) string {
 	return f.Name + " " + f.Bucket + " " + f.Mime
 }
 
+// BucketCount is one row of a bucket/album breakdown.
+type BucketCount struct {
+	Name  string
+	Count int
+}
+
+// Buckets reports every distinct bucket_display_name in tab t, largest
+// first. bucket_display_name is just the leaf directory name MediaStore
+// found the file in — it has nothing to do with which app "owns" a photo,
+// so two unrelated folders that happen to share (or nearly share) a name
+// show up as two separate, unrelated buckets here. That's real, not a bug:
+// e.g. "WhatsApp Images" is WhatsApp's own app-scoped media directory, while
+// a same-ish-named "WhatsApp" or "Whatsapp" under Pictures/ is typically a
+// folder some other app or share action created to mirror the source name.
+func (ix *Index) Buckets(t Tab) []BucketCount {
+	counts := map[string]int{}
+	for _, f := range ix.Tab(t) {
+		name := f.Bucket
+		if name == "" {
+			name = "(none)"
+		}
+		counts[name]++
+	}
+	out := make([]BucketCount, 0, len(counts))
+	for name, n := range counts {
+		out = append(out, BucketCount{Name: name, Count: n})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 // View is an ordered, filtered slice of the index ready for rendering.
 type View struct {
 	Files   []device.File
 	Matches [][]int // per-file matched byte offsets in Name, for highlighting
 }
 
-// Build applies tab, query and sort. An empty query keeps the sorted order;
-// a non-empty query orders by fuzzy score, which is what makes typing feel
-// responsive.
-func (ix *Index) Build(t Tab, query string, mode SortMode) View {
+// Build applies tab, bucket, query and sort. An empty query keeps the sorted
+// order; a non-empty query orders by fuzzy score, which is what makes typing
+// feel responsive. bucket, when non-empty, restricts to files whose
+// bucket_display_name matches exactly (case-insensitive) — the album/folder
+// filter real usage demands: WhatsApp Images (5,167 files) dwarfs Camera
+// (2,186), so "filter to Camera" is the actual bulk-curation workflow, not
+// an edge case.
+func (ix *Index) Build(t Tab, bucket, query string, mode SortMode) View {
 	src := ix.Tab(t)
+	if bucket != "" {
+		filtered := make([]device.File, 0, len(src))
+		for _, f := range src {
+			if strings.EqualFold(f.Bucket, bucket) {
+				filtered = append(filtered, f)
+			}
+		}
+		src = filtered
+	}
 
 	if query == "" {
 		files := make([]device.File, len(src))

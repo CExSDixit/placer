@@ -127,6 +127,12 @@ type Config struct {
 	Dest      string   `json:"dest"`
 	Bookmarks []string `json:"bookmarks"`
 	Recents   []string `json:"recents"`
+
+	// Preview toggles, independent and switchable at runtime via `:set`, so
+	// nobody ever has to hold a key down to stop something playing.
+	Preview  bool `json:"preview"`  // image preview on cursor rest
+	Autoplay bool `json:"autoplay"` // video frame-grab autoplay on cursor rest
+	Audio    bool `json:"audio"`    // audio auto-play on j/k (phase 3)
 }
 
 func CacheDir() string {
@@ -142,7 +148,12 @@ func ManifestPath() string { return filepath.Join(CacheDir(), "session.json") }
 
 func DefaultConfig() Config {
 	home, _ := os.UserHomeDir()
-	c := Config{Dest: filepath.Join(home, "Downloads")}
+	c := Config{
+		Dest:     filepath.Join(home, "Downloads"),
+		Preview:  true,  // Sid's explicit request
+		Autoplay: false, // confirmed by Sid: a frame grab firing on every cursor move fights j/k
+		Audio:    true,  // the scrub-through-voice-memos flow (phase 3)
+	}
 	// Only well-known directories; anything personal belongs in config.json,
 	// which the destination picker writes as you use it.
 	for _, p := range []string{
@@ -174,6 +185,22 @@ func LoadConfig() Config {
 		c.Bookmarks = got.Bookmarks
 	}
 	c.Recents = got.Recents
+
+	// The preview toggles default true/false/true; only override them from a
+	// config.json that actually mentions the key, so an old config file
+	// written before these existed doesn't silently flip them all off.
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) == nil {
+		if _, ok := raw["preview"]; ok {
+			c.Preview = got.Preview
+		}
+		if _, ok := raw["autoplay"]; ok {
+			c.Autoplay = got.Autoplay
+		}
+		if _, ok := raw["audio"]; ok {
+			c.Audio = got.Audio
+		}
+	}
 	return c
 }
 

@@ -13,10 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/CExSDixit/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/preview"
 	"github.com/CExSDixit/placer/internal/ui"
 )
 
-var version = "0.1.0-phase1"
+var version = "0.2.0-phase2"
 
 func main() {
 	var (
@@ -39,7 +40,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.New(dev), tea.WithAltScreen())
+	// Must run before the Bubble Tea program starts reading stdin: the sixel
+	// probe puts the terminal in raw mode and reads its response itself.
+	proto := preview.DetectProtocol()
+
+	p := tea.NewProgram(ui.New(dev, proto), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "placer:", err)
 		os.Exit(1)

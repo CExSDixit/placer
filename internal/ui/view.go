@@ -9,6 +9,7 @@ import (
 
 	"github.com/CExSDixit/placer/internal/device"
 	"github.com/CExSDixit/placer/internal/index"
+	"github.com/CExSDixit/placer/internal/preview"
 	"github.com/CExSDixit/placer/internal/transfer"
 )
 
@@ -25,8 +26,136 @@ func (m Model) View() string {
 		return m.header() + "\n" + m.selectionView() + "\n" + m.footer()
 	case modeTransfer:
 		return m.header() + "\n" + m.transferView() + "\n" + m.footer()
+	case modeBuckets:
+		return m.header() + "\n" + m.bucketsView() + "\n" + m.footer()
 	}
-	return m.header() + "\n" + m.listView() + "\n" + m.footer()
+	frame := m.header() + "\n" + m.bodyView() + "\n" + m.footer()
+	return frame + m.graphicsOverlay()
+}
+
+// bodyView composes the file list with a preview pane on the right, when
+// there's room and previews are on. It builds the two blocks independently
+// and zips them by raw line, rather than via lipgloss.JoinHorizontal:
+// lipgloss.Width strips ordinary SGR color codes but doesn't understand the
+// Kitty/iTerm graphics-protocol escapes the preview pane can contain, so
+// running it over those bytes would badly miscount their "visible" width and
+// corrupt the whole layout.
+func (m Model) bodyView() string {
+	pw := m.previewPaneWidth()
+	if pw <= 0 {
+		return m.listViewWidth(m.w)
+	}
+	listW := m.w - pw - 1
+	listLines := strings.Split(m.listViewWidth(listW), "\n")
+	paneLines := strings.Split(m.previewPaneView(pw, len(listLines)), "\n")
+
+	var b strings.Builder
+	for i, line := range listLines {
+		b.WriteString(padVisible(line, listW))
+		b.WriteString(" ")
+		if i < len(paneLines) {
+			b.WriteString(paneLines[i])
+		}
+		if i < len(listLines)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func padVisible(s string, w int) string {
+	if vis := lipgloss.Width(s); vis < w {
+		return s + strings.Repeat(" ", w-vis)
+	}
+	return s
+}
+
+// previewPaneView renders the right-hand pane's plain-text content: a title
+// row plus, below it, either the half-block image (which is itself ordinary
+// printable characters and fits fine here) or a status/metadata line.
+//
+// Kitty/iTerm/sixel images are deliberately NOT written into this string —
+// see graphicsOverlay — because those protocols' escape sequences aren't
+// ordinary printable content and would break every width calculation this
+// function and bodyView rely on if mixed in.
+func (m Model) previewPaneView(pw, height int) string {
+	lines := make([]string, height)
+	title := "preview"
+	if f, ok := m.cur(); ok {
+		title = f.Name
+	}
+	lines[0] = dimStyle.Render(pad(trunc(title, pw), pw))
+	if height < 2 {
+		return strings.Join(lines, "\n")
+	}
+
+	fill := func(s string) {
+		for i := 1; i < height; i++ {
+			lines[i] = ""
+		}
+		lines[1] = s
+	}
+
+	switch {
+	case m.preview.loading:
+		fill(dimStyle.Render(pad("loading…", pw)))
+	case m.preview.err != nil:
+		fill(errStyle.Render(pad(trunc(m.preview.err.Error(), pw), pw)))
+	case m.preview.result.Tier == preview.TierMeta:
+		note := m.preview.result.Note
+		if note == "" {
+			note = "no preview for this file"
+		}
+		fill(dimStyle.Render(pad(trunc(note, pw), pw)))
+	case len(m.preview.result.Rendered) == 0:
+		fill(dimStyle.Render(pad("no preview", pw)))
+	case m.proto == preview.ProtoHalfBlock:
+		imgLines := strings.Split(string(m.preview.result.Rendered), "\n")
+		for j := 0; j < height-1; j++ {
+			if j < len(imgLines) {
+				lines[1+j] = imgLines[j]
+			} else {
+				lines[1+j] = ""
+			}
+		}
+	default:
+		// Placed via graphicsOverlay at the same row/col this line would
+		// occupy; left blank here so we don't print ordinary text over
+		// where the terminal is about to draw the image.
+		fill("")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// graphicsOverlay emits a Kitty/iTerm/sixel image via absolute cursor
+// positioning, appended after the rest of the frame. The body is laid out by
+// bodyView first with the pane's image row left blank (see
+// previewPaneView), then this moves the cursor to that exact cell, draws the
+// image, and restores the cursor — the same reserve-then-place technique
+// terminal file managers (yazi, ranger, lf) use for Kitty previews in a
+// line-based TUI.
+func (m Model) graphicsOverlay() string {
+	if m.proto == preview.ProtoHalfBlock {
+		return ""
+	}
+	pw := m.previewPaneWidth()
+	if pw <= 0 {
+		return ""
+	}
+	res := m.preview.result
+	if m.preview.loading || m.preview.err != nil || len(res.Rendered) == 0 {
+		return ""
+	}
+	if res.Tier != preview.TierImage && res.Tier != preview.TierDNG {
+		return ""
+	}
+	// header() is always exactly 2 lines; bodyView's first line is the pane
+	// title, so pane content starts on the 4th on-screen row. The list
+	// column occupies m.w-pw-1 cells plus a 1-column separator.
+	const bodyStartRow = 3
+	row := bodyStartRow + 1
+	col := (m.w - pw - 1) + 2
+	return fmt.Sprintf("\x1b[s\x1b[%d;%dH%s\x1b[u", row, col, res.Rendered)
 }
 
 func (m Model) header() string {
@@ -112,8 +241,12 @@ func (m Model) header() string {
 const maxNameCol = 52
 
 func (m Model) columns() (name, size, date, kind int) {
+	return m.columnsFor(m.w)
+}
+
+func (m Model) columnsFor(w int) (name, size, date, kind int) {
 	size, date, kind = 8, 16, 7
-	name = m.w - size - date - kind - 8
+	name = w - size - date - kind - 8
 	if name > maxNameCol {
 		name = maxNameCol
 	}
@@ -123,7 +256,13 @@ func (m Model) columns() (name, size, date, kind int) {
 	return
 }
 
+// listView renders the file list at the model's full width — used when no
+// preview pane is showing.
 func (m Model) listView() string {
+	return m.listViewWidth(m.w)
+}
+
+func (m Model) listViewWidth(w int) string {
 	if m.loading {
 		return "\n  " + dimStyle.Render("indexing device…")
 	}
@@ -134,7 +273,7 @@ func (m Model) listView() string {
 		return "\n  " + dimStyle.Render("no files in this tab")
 	}
 
-	nameW, sizeW, dateW, kindW := m.columns()
+	nameW, sizeW, dateW, kindW := m.columnsFor(w)
 	var b strings.Builder
 	b.WriteString(dimStyle.Render(fmt.Sprintf("   %s %s %s %s",
 		pad("name", nameW), pad("size", sizeW), pad("date", dateW), pad("type", kindW))) + "\n")
@@ -251,6 +390,37 @@ func (m Model) selectionView() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m Model) bucketsView() string {
+	if len(m.bucketList) == 0 {
+		return "\n  " + dimStyle.Render("no buckets in this tab")
+	}
+	nameW, _, _, _ := m.columns()
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(fmt.Sprintf(" buckets in %s · %d distinct ", index.TabNames[m.tab], len(m.bucketList))) + "\n")
+	if m.bucket != "" {
+		b.WriteString(dimStyle.Render("current filter: "+m.bucket) + "\n")
+	}
+
+	h := max(1, m.h-9)
+	end := min(len(m.bucketList), m.bucketListOffset+h)
+	for i := m.bucketListOffset; i < end; i++ {
+		bk := m.bucketList[i]
+		cursor := " "
+		if i == m.bucketListCursor {
+			cursor = cursorStyle.Render("▸")
+		}
+		marker := " "
+		if m.bucket != "" && bk.Name == m.bucket {
+			marker = selectedStyle.Render("✓")
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s %s\n", cursor, marker,
+			pad(trunc(bk.Name, nameW), nameW),
+			dimStyle.Render(fmt.Sprint(bk.Count))))
+	}
+	b.WriteString("\n" + dimStyle.Render("j/k move · enter/tab filter to this bucket · c clear filter · esc back"))
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (m Model) transferView() string {
 	var b strings.Builder
 	title := fmt.Sprintf(" transferring %d files → %s ", len(m.tfiles), m.cfg.Dest)
@@ -331,7 +501,7 @@ func (m Model) footer() string {
 	case modeSelection, modeDest, modeTransfer:
 		return ""
 	}
-	hint := "j/k move · tab select · v visual · / search · d dest · p pull · s review · ? help · q quit"
+	hint := "j/k move · tab select · V range · * select-match · / search · d dest · p pull · s review · ? help · q quit"
 	if m.visual {
 		hint = visualStyle.Render(" VISUAL ") + " j/k extend · tab toggle range · esc cancel"
 	}
@@ -345,8 +515,10 @@ func (m Model) helpView() string {
 		{"ctrl+d / ctrl+u", "half page down / up"},
 		{"1–5, gt / gT", "switch tab"},
 		{"tab / space", "toggle selection"},
-		{"v", "visual mode (j/k extends, tab toggles range)"},
-		{"V", "select all visible"},
+		{"v / V", "anchor range at cursor (j/k extends, any select key commits)"},
+		{"ctrl+a", "select all visible"},
+		{"ctrl+x", "clear all visible from selection"},
+		{"*", "select everything matching the current filter"},
 		{"y", "add to selection without toggling"},
 		{"s", "selection review (d removes, c clears)"},
 		{"d", "destination picker"},
@@ -362,9 +534,14 @@ func (m Model) helpView() string {
 		{":sort date|name|size", "change ordering"},
 		{":policy skip|overwrite|rename", "collision handling"},
 		{":filter <query>", "set filter"},
+		{":bucket <name>", "filter to one album/folder (:bucket clear resets)"},
+		{":buckets", "browse every album/folder in this tab, with file counts"},
 		{":clear", "clear selection"},
 		{":refresh", "re-index"},
 		{":pull", "start transfer"},
+		{":set preview on|off", "toggle image preview on cursor rest"},
+		{":set autoplay on|off", "toggle video frame-grab autoplay"},
+		{":set audio on|off", "toggle audio auto-play (phase 3)"},
 		{":q / :q! / :wq", "quit / discard / save"},
 	}
 

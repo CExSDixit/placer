@@ -10,6 +10,7 @@ import (
 
 	"github.com/CExSDixit/placer/internal/device"
 	"github.com/CExSDixit/placer/internal/index"
+	"github.com/CExSDixit/placer/internal/preview"
 	"github.com/CExSDixit/placer/internal/session"
 )
 
@@ -53,7 +54,7 @@ func typeIn(m Model, s string) Model {
 func newTestModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	m := New(device.Synthetic(1))
+	m := New(device.Synthetic(1), preview.ProtoHalfBlock)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = next.(Model)
 	next, _ = m.Update(m.loadIndex())
@@ -291,9 +292,47 @@ func TestSelectAllVisible(t *testing.T) {
 	m := newTestModel(t)
 	m = press(m, "3") // audio: small enough to check exactly
 	n := len(m.view.Files)
-	m = press(m, "V")
+	m = press(m, "ctrl+a")
 	if m.man.Len() != n {
-		t.Errorf("V selected %d, want %d", m.man.Len(), n)
+		t.Errorf("ctrl+a selected %d, want %d", m.man.Len(), n)
+	}
+}
+
+func TestSelectAllMatching(t *testing.T) {
+	m := newTestModel(t)
+	m = press(m, "3")
+	n := len(m.view.Files)
+	m = press(m, "*")
+	if m.man.Len() != n {
+		t.Errorf("* selected %d, want %d", m.man.Len(), n)
+	}
+}
+
+func TestClearAllVisible(t *testing.T) {
+	m := newTestModel(t)
+	m = press(m, "3")
+	m = press(m, "ctrl+a")
+	if m.man.Len() == 0 {
+		t.Fatal("setup: ctrl+a selected nothing")
+	}
+	m = press(m, "ctrl+x")
+	if m.man.Len() != 0 {
+		t.Errorf("ctrl+x left %d selected, want 0", m.man.Len())
+	}
+}
+
+func TestVAnchorsVisualRange(t *testing.T) {
+	m := newTestModel(t)
+	m = press(m, "V")
+	if !m.visual {
+		t.Fatal("V did not enter visual range mode")
+	}
+	m = press(m, "j", "j", "tab")
+	if m.visual {
+		t.Fatal("committing the range should leave visual mode")
+	}
+	if m.man.Len() != 3 {
+		t.Errorf("range-select got %d, want 3", m.man.Len())
 	}
 }
 
@@ -346,7 +385,7 @@ func TestManifestPersistsAcrossSessions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	m := New(device.Synthetic(1))
+	m := New(device.Synthetic(1), preview.ProtoHalfBlock)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = next.(Model)
 	next, _ = m.Update(m.loadIndex())
