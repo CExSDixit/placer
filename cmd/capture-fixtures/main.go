@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/device"
 )
 
 func main() {

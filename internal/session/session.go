@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/device"
 )
 
 // Manifest is the set of files chosen for transfer. It is keyed by device
@@ -143,10 +143,12 @@ func ManifestPath() string { return filepath.Join(CacheDir(), "session.json") }
 func DefaultConfig() Config {
 	home, _ := os.UserHomeDir()
 	c := Config{Dest: filepath.Join(home, "Downloads")}
+	// Only well-known directories; anything personal belongs in config.json,
+	// which the destination picker writes as you use it.
 	for _, p := range []string{
 		filepath.Join(home, "Downloads"),
 		filepath.Join(home, "Pictures"),
-		filepath.Join(home, "git", "personal-media-vault"),
+		filepath.Join(home, "Desktop"),
 	} {
 		if st, err := os.Stat(p); err == nil && st.IsDir() {
 			c.Bookmarks = append(c.Bookmarks, p)

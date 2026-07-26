@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/mishrasidhant/placer/internal/device"
-	"github.com/mishrasidhant/placer/internal/index"
-	"github.com/mishrasidhant/placer/internal/transfer"
+	"github.com/CExSDixit/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/index"
+	"github.com/CExSDixit/placer/internal/transfer"
 )
 
 func (m Model) View() string {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/device"
 )
 
 // Policy decides what happens when the destination file already exists.

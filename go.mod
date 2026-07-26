@@ -1,4 +1,4 @@
-module github.com/mishrasidhant/placer
+module github.com/CExSDixit/placer
 
 go 1.26.5
 

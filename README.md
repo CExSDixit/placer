@@ -10,8 +10,8 @@ directories, and batch pull to a chosen destination.
 (photo/video/audio/documents) land in phases 2–4.
 
 ```
- 1:Photos(10397)  2:Video(483)  3:Audio(125)  4:Docs(50)  5:All(11055)   23311JEGR07766 · sort:date · skip
- 3 selected (11.4M)  → /Users/sdx/Downloads
+ 1:Photos(10397)  2:Video(483)  3:Audio(125)  4:Docs(50)  5:All(11055)   R58M20XXXXX · sort:date · skip
+ 3 selected (11.4M)  → /Users/you/Downloads
     name                                          size     date             type
  ▸✓ PXL_20260725_180427752.jpg                     2.0M     2026-07-25 18:04 jpeg
     PXL_20260725_175739170.jpg                     2.7M     2026-07-25 17:57 jpeg
@@ -41,7 +41,7 @@ linux/{amd64,arm64} — `make release` builds all four.
 
 ```sh
 placer                        # the attached device
-placer -s 23311JEGR07766      # a specific device
+placer -s R58M20XXXXX      # a specific device
 placer -fake                  # synthetic library, no device needed
 placer -fixtures testdata/fixtures
 ```

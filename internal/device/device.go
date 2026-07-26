@@ -140,7 +140,7 @@ type Progress struct {
 
 // Device is the whole surface placer needs from a phone.
 type Device interface {
-	// Serial identifies the device, e.g. "23311JEGR07766".
+	// Serial identifies the device, e.g. "R58M20XXXXX".
 	Serial() string
 
 	// Query runs a MediaStore `content query` and returns one map per row,

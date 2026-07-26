@@ -8,9 +8,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/mishrasidhant/placer/internal/device"
-	"github.com/mishrasidhant/placer/internal/index"
-	"github.com/mishrasidhant/placer/internal/session"
+	"github.com/CExSDixit/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/index"
+	"github.com/CExSDixit/placer/internal/session"
 )
 
 // key builds the tea.KeyMsg for a key name as Model.handleKey sees it.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mishrasidhant/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/device"
 	"github.com/sahilm/fuzzy"
 )
 

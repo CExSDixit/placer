@@ -12,8 +12,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/mishrasidhant/placer/internal/device"
-	"github.com/mishrasidhant/placer/internal/ui"
+	"github.com/CExSDixit/placer/internal/device"
+	"github.com/CExSDixit/placer/internal/ui"
 )
 
 var version = "0.1.0-phase1"
