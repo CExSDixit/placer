@@ -3,3 +3,4 @@ dist/
 testdata/fixtures/
 *.jpg
 *.mp4
+testdata/sample/
