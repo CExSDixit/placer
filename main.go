@@ -18,7 +18,7 @@ import (
 	"github.com/CExSDixit/placer/internal/ui"
 )
 
-var version = "0.3.1-phase3"
+var version = "0.3.2-phase3"
 
 func main() {
 	var (
@@ -45,8 +45,9 @@ func main() {
 	// reference device — so trim it to budget before adding more.
 	preview.PruneCaches()
 
-	// Must run before the Bubble Tea program starts reading stdin: the sixel
-	// probe puts the terminal in raw mode and reads its response itself.
+	// Both must run before the Bubble Tea program starts reading stdin: the
+	// sixel probe puts the terminal in raw mode and reads its response itself.
+	preview.DetectCellPixels()
 	proto := preview.DetectProtocol()
 
 	p := tea.NewProgram(ui.New(dev, proto), tea.WithAltScreen())

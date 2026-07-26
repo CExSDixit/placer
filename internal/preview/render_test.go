@@ -148,3 +148,34 @@ func TestProtocolIsInTheCacheKey(t *testing.T) {
 func sampleFileStub() device.File {
 	return device.File{Path: "/sdcard/a.jpg", Size: 1000, Mime: "image/jpeg"}
 }
+
+// TestCellPixelsHasSaneDefaults: a terminal that reports no pixel geometry
+// must still produce a usable target size, not a zero-pixel image.
+func TestCellPixelsHasSaneDefaults(t *testing.T) {
+	w, h := CellPixels()
+	if w < 4 || h < 4 {
+		t.Fatalf("cell pixels = %dx%d, too small to render into", w, h)
+	}
+	// Detection is a no-op when there is no tty (the test binary), so this
+	// also asserts DetectCellPixels never clobbers the defaults with zeros.
+	DetectCellPixels()
+	w2, h2 := CellPixels()
+	if w2 < 4 || h2 < 4 {
+		t.Errorf("cell pixels = %dx%d after detection", w2, h2)
+	}
+}
+
+// TestKittyClearTargetsOurPlacement: the delete must name placer's own image
+// id, not wipe every image in a terminal it may be sharing.
+func TestKittyClearTargetsOurPlacement(t *testing.T) {
+	got := KittyClear()
+	if !strings.HasPrefix(got, "\x1b_Ga=d") || !strings.HasSuffix(got, "\x1b\\") {
+		t.Fatalf("not a kitty delete command: %q", got)
+	}
+	if !strings.Contains(got, "i=7301") {
+		t.Errorf("delete does not name our image id: %q", got)
+	}
+	if strings.Contains(got, "d=A") || strings.Contains(got, "d=a") {
+		t.Errorf("delete is indiscriminate and would wipe other programs' images: %q", got)
+	}
+}

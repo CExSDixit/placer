@@ -131,12 +131,18 @@ which path you are on:
 
 Quadrant blocks are the default where no image protocol exists: they are
 legacy code-page glyphs present in every monospace font, so compatibility is
-the same as half-blocks for twice the horizontal resolution. Each cell can
+the same as half-blocks for twice the horizontal resolution. In practice the
+difference is subtle — the pane is small either way. Each cell can
 carry only two colours, so the renderer tries all 16 foreground/background
 partitions of the 2×2 block and keeps the one with the least squared error.
 `:set render halfblock` reverts if a font draws them with gaps.
 
-None of that closes the gap with a graphics protocol. **If previews matter,
+Graphics-protocol previews are sized from the terminal's real pixels-per-cell,
+queried via TIOCGWINSZ rather than assumed — a fixed guess is half the truth on
+a HiDPI display, and the terminal then upscales the result into something
+visibly soft.
+
+None of that closes the gap between blocks and a graphics protocol. **If previews matter,
 run placer in Ghostty or kitty** — a third of a window is ~48×35 cells, which
 is ~96×70 pixels of quadrant blocks against a real image at Kitty-protocol
 resolution.

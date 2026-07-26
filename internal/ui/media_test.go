@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -254,3 +255,137 @@ func TestSeekStepsMatchTheSpec(t *testing.T) {
 }
 
 var _ tea.Msg = playTickMsg{}
+
+// TestGraphicsOverlayAlwaysClearsKitty is the fix for images stacking up: a
+// kitty placement is persistent graphics that redrawing text does not erase,
+// so the delete has to go out even on frames with nothing to draw.
+func TestGraphicsOverlayAlwaysClearsKitty(t *testing.T) {
+	m := newTestModel(t)
+	m.proto = preview.ProtoKitty
+
+	// Nothing loaded: still must clear, or the previous file's image stays.
+	m.preview = previewState{}
+	if got := m.graphicsOverlay(); !strings.Contains(got, "a=d") {
+		t.Errorf("empty preview emitted no delete: %q", got)
+	}
+
+	// A metadata card (video with autoplay off) draws no image, and the
+	// previous one must not survive underneath it.
+	f, _ := m.cur()
+	m.preview = previewState{path: previewKeyFor(f), result: preview.MetaCard(f, "video — autoplay off")}
+	if got := m.graphicsOverlay(); !strings.Contains(got, "a=d") {
+		t.Errorf("metadata card emitted no delete: %q", got)
+	}
+
+	// With an image, clear and draw go out together so nothing flickers.
+	m.preview = previewState{
+		path:   previewKeyFor(f),
+		result: preview.Result{Tier: preview.TierImage, Rendered: []byte("IMAGEBYTES")},
+	}
+	got := m.graphicsOverlay()
+	if !strings.Contains(got, "a=d") || !strings.Contains(got, "IMAGEBYTES") {
+		t.Errorf("expected delete followed by the image, got %q", got)
+	}
+	if strings.Index(got, "a=d") > strings.Index(got, "IMAGEBYTES") {
+		t.Error("the delete must precede the image, or it erases what was just drawn")
+	}
+}
+
+// TestGraphicsOverlaySilentForTextRenderers: quadrant/half-block output is
+// ordinary text laid out by the pane, so the overlay must stay out of it.
+func TestGraphicsOverlaySilentForTextRenderers(t *testing.T) {
+	m := newTestModel(t)
+	for _, p := range []preview.Protocol{preview.ProtoQuadrant, preview.ProtoHalfBlock} {
+		m.proto = p
+		if got := m.graphicsOverlay(); got != "" {
+			t.Errorf("%s overlay = %q, want empty", p, got)
+		}
+	}
+}
+
+// TestPreviewPaneKeepsFullHeightWhenListIsShort: filtering down to a couple
+// of matches must not shrink the preview to a couple of rows. The pane owns
+// the body height, not the result set.
+func TestPreviewPaneKeepsFullHeightWhenListIsShort(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Preview = true
+	if m.previewPaneWidth() <= 0 {
+		t.Skip("terminal too narrow in this test model for a preview pane")
+	}
+	wantLines := m.listHeight() + 1
+
+	full := strings.Split(m.bodyView(), "\n")
+	if len(full) != wantLines {
+		t.Fatalf("unfiltered body has %d lines, want %d", len(full), wantLines)
+	}
+
+	// Filter to something that matches almost nothing.
+	m.query = "zzzqqqx"
+	m.cursor, m.offset = 0, 0
+	m.rebuildView()
+	if len(m.view.Files) > 3 {
+		t.Fatalf("expected a near-empty result set, got %d files", len(m.view.Files))
+	}
+
+	short := strings.Split(m.bodyView(), "\n")
+	if len(short) != wantLines {
+		t.Errorf("filtered body has %d lines, want %d — the preview pane got truncated",
+			len(short), wantLines)
+	}
+}
+
+// TestClearingSearchKeepsTheCursorOnTheSameFile: after narrowing with `/`,
+// picking a file, and pressing esc, you should land on that file's row in the
+// full list — not on whatever now happens to occupy the index you were at.
+func TestClearingSearchKeepsTheCursorOnTheSameFile(t *testing.T) {
+	m := newTestModel(t)
+	m = press(m, "/")
+	m = typeIn(m, "Screenshots")
+	m = press(m, "esc") // leave search mode, filter still applied
+	if len(m.view.Files) == 0 {
+		t.Skip("no matches for the probe query in the synthetic library")
+	}
+	m = press(m, "j", "j")
+
+	want, ok := m.cur()
+	if !ok {
+		t.Fatal("no file under the cursor after filtering")
+	}
+	filteredIdx := m.cursor
+
+	m = press(m, "esc") // clear the filter
+	if m.query != "" {
+		t.Fatal("esc did not clear the query")
+	}
+	got, ok := m.cur()
+	if !ok {
+		t.Fatal("no file under the cursor after clearing")
+	}
+	if previewKeyFor(got) != previewKeyFor(want) {
+		t.Errorf("cursor landed on %q, want %q", got.Name, want.Name)
+	}
+	if m.cursor == filteredIdx && len(m.view.Files) > 100 {
+		t.Error("cursor kept its index rather than following the file")
+	}
+	// And the row must be on screen, not scrolled past.
+	if m.cursor < m.offset || m.cursor >= m.offset+m.listHeight() {
+		t.Errorf("cursor %d is outside the visible window [%d,%d)",
+			m.cursor, m.offset, m.offset+m.listHeight())
+	}
+}
+
+// TestSameFileDoesNotRefetch: preserving the cursor means the previewed file
+// is unchanged, so no new fetch should be scheduled.
+func TestSameFileDoesNotRefetch(t *testing.T) {
+	m := newTestModel(t)
+	before := m.curPreviewKey()
+	// A key that changes nothing about which file is selected.
+	next, cmd := m.Update(key("esc"))
+	m = next.(Model)
+	if m.curPreviewKey() != before {
+		t.Fatal("esc moved the cursor")
+	}
+	if cmd != nil {
+		t.Error("a no-op key scheduled a preview fetch")
+	}
+}

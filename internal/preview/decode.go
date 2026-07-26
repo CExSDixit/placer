@@ -16,7 +16,7 @@ var errUnsupportedFormat = errors.New("preview: unsupported image format")
 // maxPreviewDim bounds the decoded/rendered image so a 48 MP photo isn't
 // carried around at full resolution; nothing here needs more than a
 // graphics-protocol terminal can show in a third of a window.
-const maxPreviewDim = 1600
+const maxPreviewDim = 2400
 
 // decodeStdlib handles the 99.4% case: JPEG, PNG, GIF via Go's stdlib.
 func decodeStdlib(mime string, data []byte) (image.Image, error) {
@@ -54,19 +54,21 @@ func downscale(img image.Image, cellW, cellH int, proto Protocol) image.Image {
 // subcell reports how many source pixels each terminal cell carries, which is
 // the entire resolution story for a preview:
 //
-//	half-block   1×2 — one glyph, foreground over background
-//	quadrant     2×2 — twice the horizontal detail for the same pane
-//	kitty/iterm  8×16 — a real image; the cell grid stops being the limit
+//	half-block  1×2 — one glyph, foreground over background
+//	quadrant    2×2 — twice the horizontal detail for the same pane
+//	graphics    the terminal's real pixels-per-cell; the grid stops being the limit
 //
 // The graphics protocols were previously fed a source only cellW pixels wide,
 // i.e. ~48 px for a whole photo, and then asked to scale it up to fill the
 // pane. That threw away almost everything before the terminal ever saw it.
+// The replacement guess of 8×16 was still half the truth on a HiDPI display,
+// so the size now comes from the terminal itself — see DetectCellPixels.
 func (p Protocol) subcell() (int, int) {
 	switch p {
 	case ProtoQuadrant:
 		return 2, 2
 	case ProtoKitty, ProtoIterm, ProtoSixel:
-		return 8, 16
+		return CellPixels()
 	default:
 		return 1, 2
 	}
@@ -88,12 +90,16 @@ func targetPixels(srcW, srcH, cellW, cellH int, proto Protocol) (int, int) {
 	w := max(1, int(float64(srcW)*scale))
 	h := max(1, int(float64(srcH)*scale))
 	// Block rendering maps a whole number of pixel rows/columns per glyph, so
-	// round up to the subcell grid rather than dropping a partial row.
-	for w%sx != 0 {
-		w++
-	}
-	for h%sy != 0 {
-		h++
+	// round up to the subcell grid rather than dropping a partial row. The
+	// graphics protocols have no such constraint — rounding there would
+	// upscale a small source for no reason.
+	if proto.IsText() {
+		for w%sx != 0 {
+			w++
+		}
+		for h%sy != 0 {
+			h++
+		}
 	}
 	return w, h
 }

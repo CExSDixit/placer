@@ -247,6 +247,26 @@ func (m *Model) rebuildView() {
 	m.clampOffset()
 }
 
+// rebuildKeepingCursor rebuilds the view and puts the cursor back on the same
+// FILE, not the same index — so clearing a search returns you to where you
+// were in the full list rather than to whatever now happens to sit at that
+// row. If the file didn't survive the change (it's not in the new bucket, or
+// no longer matches), the cursor stays put and is clamped.
+func (m *Model) rebuildKeepingCursor() {
+	key := m.curPreviewKey()
+	m.rebuildView()
+	if key == "" {
+		return
+	}
+	for i, f := range m.view.Files {
+		if previewKeyFor(f) == key {
+			m.cursor = i
+			m.clampOffset()
+			return
+		}
+	}
+}
+
 func (m *Model) listHeight() int {
 	// header(2) + column head(1) + footer(2)
 	return max(1, m.h-6)
@@ -628,11 +648,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Reschedule only when the key press landed the cursor on a DIFFERENT
+	// file. Keying off the file rather than off tab/query/bucket matters now
+	// that clearing a search keeps the cursor where it was: the view changed
+	// but the previewed file didn't, so there is nothing to re-fetch.
 	before := m.curPreviewKey()
-	beforeBucket, beforeQuery, beforeTab := m.bucket, m.query, m.tab
 	newModel, cmd := m.handleKey(km)
 	nm := newModel.(Model)
-	if nm.curPreviewKey() != before || nm.bucket != beforeBucket || nm.query != beforeQuery || nm.tab != beforeTab {
+	if nm.curPreviewKey() != before {
 		pcmd := nm.schedulePreview()
 		return nm, tea.Batch(cmd, pcmd)
 	}
@@ -669,7 +692,7 @@ func (m Model) handleKey(km tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.query = ""
 			m.input.SetValue("")
 			m.input.Blur()
-			m.rebuildView()
+			m.rebuildKeepingCursor()
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -904,9 +927,11 @@ func (m Model) handleNormalKey(k string) (tea.Model, tea.Cmd) {
 		if m.visual {
 			m.visual = false
 		} else if m.query != "" {
+			// Land back on the file you were looking at in the filtered list,
+			// at its position in the full one.
 			m.query = ""
 			m.input.SetValue("")
-			m.rebuildView()
+			m.rebuildKeepingCursor()
 		}
 
 	case "s":
@@ -1227,7 +1252,7 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		default:
 			return m, m.setStatus(errStyle.Render("sort: date|name|size"))
 		}
-		m.rebuildView()
+		m.rebuildKeepingCursor()
 		return m, m.setStatus("sorted by " + index.SortNames[m.sortBy])
 	case "policy":
 		switch arg {

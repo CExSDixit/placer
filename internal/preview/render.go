@@ -89,14 +89,40 @@ func DetectProtocol() Protocol {
 	return ProtoQuadrant
 }
 
+// placer only ever shows one preview image at a time, so it reuses a single
+// kitty image id and placement id. The number is arbitrary but must be stable
+// and unlikely to collide with another program sharing the terminal.
+const (
+	kittyImageID     = 7301
+	kittyPlacementID = 1
+)
+
+// KittyClear deletes placer's placement and frees the image data behind it.
+//
+// This has to be emitted on EVERY frame that a kitty preview could be
+// visible, including the frames where there is nothing to draw: kitty images
+// are persistent graphics that ordinary text redraw does not erase, so a pane
+// that switches from a photo to a metadata card would otherwise keep showing
+// the photo. Sending it in the same write as the replacement image means the
+// terminal processes both before compositing, so there is no flicker.
+func KittyClear() string {
+	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,p=%d\x1b\\", kittyImageID, kittyPlacementID)
+}
+
 // Render encodes img for the given protocol at cellW×cellH terminal cells.
 // The returned bytes are ready to write straight into the TUI frame.
 func Render(img image.Image, proto Protocol, cellW, cellH int) ([]byte, error) {
 	switch proto {
 	case ProtoKitty:
 		var buf bytes.Buffer
+		// Every preview reuses one image id, and the overlay deletes that id
+		// before drawing. Kitty placements are persistent graphics, not text:
+		// without an explicit delete they simply accumulate, so the waveform
+		// for the file you just moved to lands on top of the photo you were
+		// looking at a moment ago.
 		err := rasterm.KittyWriteImage(&buf, img, rasterm.KittyImgOpts{
 			DstCols: uint32(cellW), DstRows: uint32(cellH),
+			ImageId: kittyImageID, PlacementId: kittyPlacementID,
 		})
 		return buf.Bytes(), err
 	case ProtoIterm:

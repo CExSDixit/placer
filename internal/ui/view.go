@@ -47,6 +47,16 @@ func (m Model) bodyView() string {
 	}
 	listW := m.w - pw - 1
 	listLines := strings.Split(m.listViewWidth(listW), "\n")
+
+	// The preview pane occupies the whole body height regardless of how many
+	// rows the list happens to have. Without this the pane is only as tall as
+	// the result set, so filtering down to three files truncates the preview
+	// to three rows in a block renderer — and in kitty, where the image is
+	// placed by absolute position rather than zipped line by line, it draws
+	// at full size over the empty space below instead.
+	for len(listLines) < m.listHeight()+1 {
+		listLines = append(listLines, "")
+	}
 	paneLines := strings.Split(m.previewPaneView(pw, len(listLines)), "\n")
 
 	var b strings.Builder
@@ -191,16 +201,25 @@ func (m Model) graphicsOverlay() string {
 	if m.proto.IsText() {
 		return ""
 	}
+	// Kitty placements are persistent graphics that redrawing text does not
+	// erase, so the previous preview has to be deleted explicitly on every
+	// frame — including the frames with nothing to draw, or moving from a
+	// photo to a metadata card would leave the photo on screen.
+	clear := ""
+	if m.proto == preview.ProtoKitty {
+		clear = preview.KittyClear()
+	}
+
 	pw := m.previewPaneWidth()
 	if pw <= 0 {
-		return ""
+		return clear
 	}
 	res := m.preview.result
 	if m.preview.loading || m.preview.err != nil || len(res.Rendered) == 0 {
-		return ""
+		return clear
 	}
 	if !res.HasImage() {
-		return ""
+		return clear
 	}
 	// header() is always exactly 2 lines; bodyView's first line is the pane
 	// title, so pane content starts on the 4th on-screen row. The list
@@ -208,7 +227,9 @@ func (m Model) graphicsOverlay() string {
 	const bodyStartRow = 3
 	row := bodyStartRow + 1
 	col := (m.w - pw - 1) + 2
-	return fmt.Sprintf("\x1b[s\x1b[%d;%dH%s\x1b[u", row, col, res.Rendered)
+	// Clear and draw go out in the same write, so the terminal has both
+	// before it composites the next frame and nothing flickers.
+	return clear + fmt.Sprintf("\x1b[s\x1b[%d;%dH%s\x1b[u", row, col, res.Rendered)
 }
 
 func (m Model) header() string {
