@@ -143,11 +143,7 @@ func New(dev device.Device, proto preview.Protocol) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	cfg := session.LoadConfig()
-	// A saved `:set render` beats autodetection: the user has looked at both
-	// and picked, which is better evidence than a capability probe.
-	if p, ok := preview.ParseProtocol(cfg.Render); ok {
-		proto = p
-	}
+	proto = resolveProtocol(proto, cfg.Render)
 	return Model{
 		dev:     dev,
 		cfg:     cfg,
@@ -160,6 +156,30 @@ func New(dev device.Device, proto preview.Protocol) Model {
 		proto:   proto,
 		player:  player.New(preview.Tool),
 	}
+}
+
+// resolveProtocol reconciles what the terminal advertises with a saved
+// `:set render` choice.
+//
+// A saved choice must never downgrade a terminal that actually supports
+// images. The setting exists so someone whose font draws quadrant glyphs
+// badly can fall back to half-blocks — a statement about *block rendering*,
+// made in a terminal that had no image protocol. Persisting it unconditionally
+// meant picking "quadrant" once in Terminal.app then getting quadrant in
+// Ghostty forever, which is exactly backwards.
+//
+// So: a saved graphics protocol is always honoured (it can only be a
+// deliberate choice), and a saved block renderer applies only when detection
+// also found no image protocol. `:set render auto` clears the override.
+func resolveProtocol(detected preview.Protocol, saved string) preview.Protocol {
+	p, ok := preview.ParseProtocol(saved)
+	if !ok {
+		return detected
+	}
+	if p.IsText() && !detected.IsText() {
+		return detected
+	}
+	return p
 }
 
 type indexLoadedMsg struct {
@@ -1324,14 +1344,29 @@ func (m Model) runSet(arg string) (tea.Model, tea.Cmd) {
 	// picks the block-drawing scheme, which is the ceiling on preview quality
 	// in a terminal with no image protocol.
 	if fields[0] == "render" {
+		if fields[1] == "auto" {
+			// Drop the override and go back to whatever this terminal
+			// advertises, which is the right answer in every terminal that
+			// isn't the one the override was set in.
+			m.cfg.Render = ""
+			_ = m.cfg.Save()
+			m.proto = preview.DetectedProtocol()
+			return m, tea.Batch(m.schedulePreview(),
+				m.setStatus("render: auto ("+m.proto.String()+")"))
+		}
 		p, ok := preview.ParseProtocol(fields[1])
 		if !ok {
-			return m, m.setStatus(errStyle.Render("render: quadrant|halfblock|kitty|iterm|sixel"))
+			return m, m.setStatus(errStyle.Render("render: auto|quadrant|halfblock|kitty|iterm|sixel"))
 		}
 		m.proto = p
 		m.cfg.Render = fields[1]
 		_ = m.cfg.Save()
-		return m, tea.Batch(m.schedulePreview(), m.setStatus("render: "+p.String()))
+		note := "render: " + p.String()
+		if p.IsText() && !preview.DetectedProtocol().IsText() {
+			note += " (this terminal supports " + preview.DetectedProtocol().String() +
+				"; the override is not saved across terminals that do)"
+		}
+		return m, tea.Batch(m.schedulePreview(), m.setStatus(note))
 	}
 
 	on := fields[1] == "on"

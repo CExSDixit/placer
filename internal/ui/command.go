@@ -31,7 +31,7 @@ var setValues = []string{"off", "on"}
 
 // renderValues completes `:set render <mode>`, the one setting whose value
 // is not on|off.
-var renderValues = []string{"halfblock", "iterm", "kitty", "quadrant", "sixel"}
+var renderValues = []string{"auto", "halfblock", "iterm", "kitty", "quadrant", "sixel"}
 
 // candidates returns the completions available for a partially typed command
 // line, along with the prefix they should replace.

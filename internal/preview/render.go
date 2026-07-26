@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"math"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BourgeoisBear/rasterm"
 )
@@ -77,17 +78,29 @@ func (p Protocol) IsText() bool {
 // monospace font — for twice the horizontal resolution. `:set render
 // halfblock` goes back if a font renders them with gaps.
 func DetectProtocol() Protocol {
-	if rasterm.IsKittyCapable() {
-		return ProtoKitty
+	p := ProtoQuadrant
+	switch {
+	case rasterm.IsKittyCapable():
+		p = ProtoKitty
+	case rasterm.IsItermCapable():
+		p = ProtoIterm
+	default:
+		if ok, err := rasterm.IsSixelCapable(); err == nil && ok {
+			p = ProtoSixel
+		}
 	}
-	if rasterm.IsItermCapable() {
-		return ProtoIterm
-	}
-	if ok, err := rasterm.IsSixelCapable(); err == nil && ok {
-		return ProtoSixel
-	}
-	return ProtoQuadrant
+	detected.Store(int32(p))
+	return p
 }
+
+// detected remembers what DetectProtocol found, so a later `:set render auto`
+// can go back to it without re-running the sixel probe — which reads from the
+// terminal and must not run while Bubble Tea owns stdin.
+var detected atomic.Int32
+
+// DetectedProtocol reports what the terminal advertised at startup,
+// regardless of any override in force.
+func DetectedProtocol() Protocol { return Protocol(detected.Load()) }
 
 // placer only ever shows one preview image at a time, so it reuses a single
 // kitty image id and placement id. The number is arbitrary but must be stable

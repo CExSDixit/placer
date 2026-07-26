@@ -389,3 +389,54 @@ func TestSameFileDoesNotRefetch(t *testing.T) {
 		t.Error("a no-op key scheduled a preview fetch")
 	}
 }
+
+// TestSavedRenderNeverDowngradesAGraphicsTerminal is the regression Sid hit:
+// picking "quadrant" once in Terminal.app persisted it, and placer then used
+// quadrant in Ghostty forever. The setting exists to choose between BLOCK
+// renderers when the terminal has no image protocol; it must not override a
+// terminal that does.
+func TestSavedRenderNeverDowngradesAGraphicsTerminal(t *testing.T) {
+	for _, saved := range []string{"quadrant", "halfblock", "half", "quad"} {
+		if got := resolveProtocol(preview.ProtoKitty, saved); got != preview.ProtoKitty {
+			t.Errorf("saved %q downgraded a kitty terminal to %v", saved, got)
+		}
+		if got := resolveProtocol(preview.ProtoIterm, saved); got != preview.ProtoIterm {
+			t.Errorf("saved %q downgraded an iterm terminal to %v", saved, got)
+		}
+	}
+
+	// In a terminal with no image protocol the saved block choice is exactly
+	// what it is for, and must win.
+	if got := resolveProtocol(preview.ProtoQuadrant, "halfblock"); got != preview.ProtoHalfBlock {
+		t.Errorf("saved halfblock ignored in a block-only terminal: %v", got)
+	}
+
+	// An explicitly saved graphics protocol is a deliberate choice and is
+	// always honoured.
+	if got := resolveProtocol(preview.ProtoQuadrant, "kitty"); got != preview.ProtoKitty {
+		t.Errorf("saved kitty ignored: %v", got)
+	}
+
+	// No override, or an unparseable one, leaves detection alone.
+	for _, saved := range []string{"", "nonsense", "auto"} {
+		if got := resolveProtocol(preview.ProtoKitty, saved); got != preview.ProtoKitty {
+			t.Errorf("saved %q changed the detected protocol to %v", saved, got)
+		}
+	}
+}
+
+// TestSetRenderAutoClearsTheOverride: there has to be a way back to
+// autodetection without hand-editing config.json.
+func TestSetRenderAutoClearsTheOverride(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Render = "halfblock"
+
+	next, _ := m.runCommand("set render auto")
+	m = next.(Model)
+	if m.cfg.Render != "" {
+		t.Errorf("`:set render auto` left %q saved", m.cfg.Render)
+	}
+	if m.proto != preview.DetectedProtocol() {
+		t.Errorf("proto = %v, want the detected %v", m.proto, preview.DetectedProtocol())
+	}
+}

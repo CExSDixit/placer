@@ -96,7 +96,7 @@ usable for review:
 Commands: `:dest <path>`, `:mkdir <name>`, `:sort date|name|size`,
 `:policy skip|overwrite|rename`, `:filter <q>`, `:bucket <name>` (`:buckets`
 browses every album/folder with counts), `:clear`, `:refresh`, `:pull`,
-`:set preview|autoplay|audio on|off`, `:set render quadrant|halfblock`,
+`:set preview|autoplay|audio on|off`, `:set render quadrant|halfblock|auto`,
 `:q` `:q!` `:wq`. In command mode `tab`
 completes the command and its argument, and up/down walk this session's
 history.
@@ -135,7 +135,11 @@ the same as half-blocks for twice the horizontal resolution. In practice the
 difference is subtle — the pane is small either way. Each cell can
 carry only two colours, so the renderer tries all 16 foreground/background
 partitions of the 2×2 block and keeps the one with the least squared error.
-`:set render halfblock` reverts if a font draws them with gaps.
+`:set render halfblock` reverts if a font draws them with gaps, and
+`:set render auto` goes back to autodetection. A saved block-renderer choice
+never overrides a terminal that does support images — the setting is about
+choosing between block renderers, so picking one in Terminal.app must not
+follow you into Ghostty.
 
 Graphics-protocol previews are sized from the terminal's real pixels-per-cell,
 queried via TIOCGWINSZ rather than assumed — a fixed guess is half the truth on

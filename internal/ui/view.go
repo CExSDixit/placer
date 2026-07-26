@@ -683,6 +683,7 @@ func (m Model) helpView() string {
 		{":set preview on|off", "toggle image preview on cursor rest"},
 		{":set autoplay on|off", "video frame grab on cursor rest (default off)"},
 		{":set audio on|off", "audio auto-play on j/k in the Audio tab"},
+		{":set render <mode>", "quadrant|halfblock|auto — auto re-detects the terminal"},
 		{":q / :q! / :wq", "quit / discard / save"},
 		{"tab (in :)", "complete the command or its argument"},
 		{"up / down (in :)", "walk this session's command history"},
