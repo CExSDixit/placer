@@ -30,42 +30,93 @@ func (m Model) View() string {
 }
 
 func (m Model) header() string {
-	var tabs []string
 	counts := map[index.Tab]int{}
 	if m.ix != nil {
 		counts = m.ix.Counts()
 	}
-	for i := range index.TabNames {
-		t := index.Tab(i)
-		label := fmt.Sprintf("%d:%s(%d)", i+1, t.String(), counts[t])
-		if t == m.tab {
-			tabs = append(tabs, tabActive.Render(label))
+
+	// Tab labels grow with the library size (5 digits of count each once there
+	// are 10k+ files), so the strip has to shed detail on a narrow terminal
+	// rather than overflow: full label -> no counts -> abbreviated -> numbers.
+	labelFor := []func(i int, t index.Tab) string{
+		func(i int, t index.Tab) string { return fmt.Sprintf("%d:%s(%d)", i+1, t, counts[t]) },
+		func(i int, t index.Tab) string { return fmt.Sprintf("%d:%s", i+1, t) },
+		func(i int, t index.Tab) string { return fmt.Sprintf("%d:%.3s", i+1, t) },
+		func(i int, t index.Tab) string { return fmt.Sprint(i + 1) },
+	}
+
+	var labels []string
+	for _, mk := range labelFor {
+		labels = labels[:0]
+		total := 0
+		for i := range index.TabNames {
+			l := mk(i, index.Tab(i))
+			labels = append(labels, l)
+			total += len([]rune(l)) + 2 // tab styles pad by 1 either side
+		}
+		if total <= m.w {
+			break
+		}
+	}
+
+	var tabs []string
+	for i, l := range labels {
+		if index.Tab(i) == m.tab {
+			tabs = append(tabs, tabActive.Render(l))
 		} else {
-			tabs = append(tabs, tabInactive.Render(label))
+			tabs = append(tabs, tabInactive.Render(l))
 		}
 	}
 	left := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
-	right := headerStyle.Render(fmt.Sprintf("%s · sort:%s · %s",
-		m.dev.Serial(), index.SortNames[m.sortBy], transfer.PolicyNames[m.pol]))
-
-	gap := m.w - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+	// The status cluster degrades rather than getting chopped mid-word by the
+	// terminal: drop the policy, then the sort, then the serial, whichever
+	// still fits. Tab labels grow with the library size, so on a narrow
+	// terminal there may be room for none of it.
+	avail := m.w - lipgloss.Width(left) - 2
+	rightPlain := ""
+	for _, c := range []string{
+		fmt.Sprintf("%s · sort:%s · %s", m.dev.Serial(), index.SortNames[m.sortBy], transfer.PolicyNames[m.pol]),
+		fmt.Sprintf("%s · sort:%s", m.dev.Serial(), index.SortNames[m.sortBy]),
+		m.dev.Serial(),
+		fmt.Sprintf("sort:%s", index.SortNames[m.sortBy]),
+	} {
+		if len([]rune(c)) <= avail {
+			rightPlain = c
+			break
+		}
 	}
-	line1 := left + strings.Repeat(" ", gap) + right
+
+	line1 := left
+	if rightPlain != "" {
+		gap := m.w - lipgloss.Width(left) - len([]rune(rightPlain))
+		if gap < 1 {
+			gap = 1
+		}
+		line1 += strings.Repeat(" ", gap) + headerStyle.Render(rightPlain)
+	}
 
 	sel := fmt.Sprintf("%d selected (%s)", m.man.Len(), humanBytes(m.man.TotalBytes()))
-	dst := "→ " + truncLeft(m.cfg.Dest, max(10, m.w-lipgloss.Width(sel)-6))
-	line2 := selectedStyle.Render(sel) + "  " + pathStyle.Render(dst)
+	line2 := selectedStyle.Render(sel)
+	if room := m.w - len([]rune(sel)) - 6; room > 8 {
+		line2 += "  " + pathStyle.Render("→ "+truncLeft(m.cfg.Dest, room))
+	}
 
 	return line1 + "\n" + line2
 }
 
-// column widths: name gets whatever is left over
+// columns sizes the list. The name column takes what is left over but is
+// capped: real filenames run ~30 chars, so on a wide terminal an uncapped name
+// column pushes size/date/type to the far edge and leaves a dead gap in the
+// middle.
+const maxNameCol = 52
+
 func (m Model) columns() (name, size, date, kind int) {
 	size, date, kind = 8, 16, 7
 	name = m.w - size - date - kind - 8
+	if name > maxNameCol {
+		name = maxNameCol
+	}
 	if name < 12 {
 		name = 12
 	}
@@ -273,6 +324,12 @@ func (m Model) footer() string {
 	}
 	if m.status != "" {
 		return trunc(m.status, m.w)
+	}
+	// The selection, destination and transfer panes carry their own key hints;
+	// showing the list hint underneath them too just duplicates a line.
+	switch m.mode {
+	case modeSelection, modeDest, modeTransfer:
+		return ""
 	}
 	hint := "j/k move · tab select · v visual · / search · d dest · p pull · s review · ? help · q quit"
 	if m.visual {

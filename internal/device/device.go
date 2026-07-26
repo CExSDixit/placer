@@ -98,6 +98,21 @@ func (f File) SortTime() time.Time {
 	return f.Added
 }
 
+// Pullable reports whether this row is a transferable file.
+//
+// MediaStore's downloads collection also returns *directory* rows — measured:
+// 10 on a real device ("Nearby Share", "CamScanner", "Adobe Acrobat", …). Size
+// does not distinguish them: 8 of the 10 report the directory inode size of
+// 3452 and only 2 report NULL. The reliable signal is that a directory has no
+// mime_type, while every file MediaStore indexes has one.
+//
+// Trade-off: an extension-less real file that MediaStore could not type is also
+// excluded. That is acceptable here — this is a media tool, and the preview
+// tiers key off mime anyway.
+func (f File) Pullable() bool {
+	return f.Path != "" && f.Mime != ""
+}
+
 // ContentURI is the scoped-storage escape hatch for rows whose _data path is
 // null or unreadable — the bytes can still be streamed by ID.
 func (f File) ContentURI() string {

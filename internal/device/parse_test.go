@@ -207,3 +207,65 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+// The device emits the literal string "NULL" rather than omitting null
+// columns — measured on a real Pixel 6a. Treating it as a value put the string
+// "NULL" into mime types and made directory rows look like files.
+func TestParseRows_LiteralNULLIsAbsent(t *testing.T) {
+	out := `Row: 0 _id=1000053113, _data=/storage/emulated/0/Download/Nearby Share, _display_name=Nearby Share, _size=NULL, mime_type=NULL, date_added=NULL`
+	rows := ParseRows(out, []string{"_id", "_data", "_display_name", "_size", "mime_type", "date_added"})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	for _, k := range []string{"_size", "mime_type", "date_added"} {
+		if v, ok := rows[0][k]; ok {
+			t.Errorf("%s should be absent, got %q", k, v)
+		}
+	}
+	if rows[0]["_display_name"] != "Nearby Share" {
+		t.Errorf("display name = %q", rows[0]["_display_name"])
+	}
+
+	f := ToFile(rows[0], Downloads)
+	if f.Mime != "" {
+		t.Errorf("mime should be empty, got %q", f.Mime)
+	}
+	if f.Pullable() {
+		t.Error("a directory row must not be Pullable")
+	}
+}
+
+func TestParseRows_NullDatetakenFallsBack(t *testing.T) {
+	// 5,688 real rows have datetaken=NULL and must fall back to date_added.
+	out := `Row: 0 _data=/storage/emulated/0/Pictures/IMG-WA0006.jpeg, _display_name=IMG-WA0006.jpeg, _size=1000, mime_type=image/jpeg, datetaken=NULL, date_added=1774461868`
+	rows := ParseRows(out, StandardProjection(Images))
+	f := ToFile(rows[0], Images)
+	if !f.Taken.IsZero() {
+		t.Errorf("Taken should be zero for NULL datetaken, got %v", f.Taken)
+	}
+	if f.SortTime().IsZero() {
+		t.Error("SortTime should fall back to date_added")
+	}
+	if !f.Pullable() {
+		t.Error("a real file with a size and mime must be Pullable")
+	}
+}
+
+func TestPullable(t *testing.T) {
+	cases := []struct {
+		name string
+		f    File
+		want bool
+	}{
+		{"real file", File{Path: "/sdcard/a.jpg", Mime: "image/jpeg", Size: 100}, true},
+		{"directory row", File{Path: "/sdcard/Nearby Share"}, false},
+		{"no path", File{Mime: "image/jpeg", Size: 100}, false},
+		{"directory with inode size", File{Path: "/sdcard/CamScanner", Size: 3452}, false},
+		{"mime but zero size", File{Path: "/sdcard/x.jpg", Mime: "image/jpeg"}, true},
+	}
+	for _, c := range cases {
+		if got := c.f.Pullable(); got != c.want {
+			t.Errorf("%s: Pullable() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -49,8 +49,11 @@ func buildBoundaryRe(projection []string) *regexp.Regexp {
 }
 
 // ParseRows turns raw `content query` stdout into one map per row, keyed by
-// projection column. Columns that were NULL on the device are omitted from
-// the map entirely — content query does not emit them.
+// projection column. Columns the device reported as NULL are omitted from the
+// map, whether it omitted them or emitted the literal string "NULL".
+//
+// Caveat: a value that is genuinely the four characters "NULL" is
+// indistinguishable from a null column and will be dropped.
 func ParseRows(out string, projection []string) []map[string]string {
 	re := buildBoundaryRe(projection)
 	if re == nil {
@@ -76,7 +79,15 @@ func ParseRows(out string, projection []string) []map[string]string {
 			if i+1 < len(locs) {
 				valEnd = locs[i+1][0] // start of next anchor, incl. its ", "
 			}
-			row[key] = body[valStart:valEnd]
+			val := body[valStart:valEnd]
+			// The device emits the literal string "NULL" for null columns
+			// rather than omitting them (measured: 5,688 datetaken=NULL and 10
+			// mime_type=NULL rows on a real Pixel 6a). Treat it as absent, so
+			// downstream code never sees "NULL" as a mime type or filename.
+			if val == "NULL" {
+				continue
+			}
+			row[key] = val
 		}
 		rows = append(rows, row)
 	}

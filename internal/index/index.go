@@ -98,6 +98,9 @@ func Load(ctx context.Context, dev device.Device) (*Index, []error) {
 		if f.Name == "" && f.Path == "" {
 			continue // nothing addressable
 		}
+		if !f.Pullable() {
+			continue // directory row, not a file
+		}
 		ix.All = append(ix.All, f)
 	}
 	ix.rebuild()

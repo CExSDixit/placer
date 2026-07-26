@@ -168,3 +168,32 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// Guards the literal-"NULL" bug against the real captured rows.
+func TestRealFixtures_NoLiteralNULLLeaks(t *testing.T) {
+	dir := fixtureDir(t)
+	for name, coll := range map[string]Collection{
+		"images": Images, "video": Video, "audio": Audio, "downloads": Downloads,
+	} {
+		b, err := os.ReadFile(filepath.Join(dir, name+".txt"))
+		if err != nil {
+			continue
+		}
+		rows := ParseRows(string(b), StandardProjection(coll))
+		var nulls, dirs int
+		for _, r := range rows {
+			for k, v := range r {
+				if v == "NULL" {
+					nulls++
+					if nulls <= 3 {
+						t.Errorf("%s: %s came through as literal \"NULL\"", name, k)
+					}
+				}
+			}
+			if !ToFile(r, coll).Pullable() {
+				dirs++
+			}
+		}
+		t.Logf("%-10s rows=%-6d literal_NULL=%d non_pullable(dirs)=%d", name, len(rows), nulls, dirs)
+	}
+}

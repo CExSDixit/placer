@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mishrasidhant/adbfz/internal/device"
 	"github.com/mishrasidhant/adbfz/internal/index"
@@ -412,5 +413,50 @@ func TestShortKind(t *testing.T) {
 	// Timed media shows duration instead.
 	if got := shortKind(device.File{Mime: "video/mp4", Duration: 95 * time.Second}); got != "1:35" {
 		t.Errorf("duration label = %q, want 1:35", got)
+	}
+}
+
+// Regression: with wide tab labels the header status cluster must degrade
+// gracefully instead of being chopped mid-word by the terminal, and no header
+// line may exceed the terminal width.
+func TestHeaderNeverOverflows(t *testing.T) {
+	m := newTestModel(t)
+	for _, w := range []int{200, 120, 90, 79, 70, 60, 40, 24} {
+		next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: 30})
+		mm := next.(Model)
+		for i, line := range strings.Split(mm.header(), "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Errorf("width %d: header line %d is %d wide:\n%q", w, i, got, line)
+			}
+		}
+	}
+}
+
+// At the width from the real screenshot the serial must be whole or absent —
+// never a fragment like "23311".
+func TestHeaderSerialNotTruncatedMidWord(t *testing.T) {
+	m := newTestModel(t)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 79, Height: 30})
+	mm := next.(Model)
+	line := strings.Split(mm.header(), "\n")[0]
+	serial := mm.dev.Serial()
+	for n := 4; n < len(serial); n++ {
+		frag := serial[:n]
+		if strings.Contains(line, frag) && !strings.Contains(line, serial) {
+			t.Errorf("header shows serial fragment %q without the full serial:\n%q", frag, line)
+			return
+		}
+	}
+}
+
+// Panes that print their own hints must not also get the list footer hint.
+func TestNoDuplicateHintLines(t *testing.T) {
+	m := newTestModel(t)
+	for _, keys := range [][]string{{"tab", "s"}, {"d"}} {
+		mm := press(m, keys...)
+		out := mm.View()
+		if n := strings.Count(out, "j/k move"); n > 1 {
+			t.Errorf("after %v: %d hint lines containing \"j/k move\":\n%s", keys, n, out)
+		}
 	}
 }
