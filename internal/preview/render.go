@@ -73,6 +73,11 @@ func (p Protocol) IsText() bool {
 // speak the iTerm2 protocol; Terminal.app speaks neither (measured:
 // `kitty:false sixel:false iterm:false`).
 //
+// Detection asks the terminal before trusting the environment, because
+// environment variables describe the innermost program — inside herdr they
+// describe herdr, not the Ghostty underneath it that will actually draw the
+// image.
+//
 // The no-protocol fallback is quadrant blocks, not half-blocks: same
 // compatibility — they are legacy code-page glyphs present in every
 // monospace font — for twice the horizontal resolution. `:set render
@@ -80,7 +85,11 @@ func (p Protocol) IsText() bool {
 func DetectProtocol() Protocol {
 	p := ProtoQuadrant
 	switch {
-	case rasterm.IsKittyCapable():
+	// ProbeKitty first: env sniffing cannot see through a multiplexer, and a
+	// herdr pane hosted by Ghostty reports TERM_PROGRAM=Apple_Terminal with no
+	// KITTY_WINDOW_ID even though herdr forwards graphics straight through.
+	// Asking the terminal is the only way to know. See probe.go.
+	case ProbeKitty(), rasterm.IsKittyCapable():
 		p = ProtoKitty
 	case rasterm.IsItermCapable():
 		p = ProtoIterm

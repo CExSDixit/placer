@@ -161,27 +161,27 @@ func New(dev device.Device, proto preview.Protocol) Model {
 // resolveProtocol reconciles what the terminal advertises with a saved
 // `:set render` choice.
 //
-// The rule: **an override may choose between renderers the terminal can
-// actually drive, but may never cross the line between block rendering and a
-// graphics protocol.** It cannot claim a capability the terminal doesn't
-// advertise, and it cannot discard one it does.
+// A saved BLOCK renderer never downgrades a terminal that advertises
+// graphics: that setting is about choosing between block renderers when a
+// font draws the quadrant glyphs badly, and persisting it unconditionally
+// meant picking "quadrant" once in Terminal.app then getting quadrant in
+// Ghostty forever.
 //
-// Both halves are load-bearing, and each was a real bug:
+// A saved GRAPHICS renderer IS honoured even when detection found none. That
+// asymmetry is deliberate: detection can produce a false negative — inside a
+// multiplexer the environment describes the multiplexer, not the terminal
+// underneath — and forcing the protocol is the user's escape hatch when it
+// does. Blocking it broke a working herdr setup. DetectProtocol now probes
+// the terminal actively, so this should rarely be needed, but "rarely" is not
+// "never" and the override has to keep working.
 //
-//   - Picking "quadrant" once while comparing block renderers in Terminal.app
-//     persisted it, and Ghostty — which speaks kitty — then came up in
-//     quadrant forever.
-//   - Picking "kitty" once persisted it too, and placer then emitted kitty
-//     escapes inside a herdr pane, which advertises no graphics protocol and
-//     silently swallows them. The preview pane just came up blank, and it
-//     looked for all the world like a herdr session-state problem.
-//
-// Within a class the override is honoured, which is all it was ever for:
-// quadrant vs half-block when a font draws the quadrant glyphs badly.
 // `:set render auto` clears it.
 func resolveProtocol(detected preview.Protocol, saved string) preview.Protocol {
 	p, ok := preview.ParseProtocol(saved)
-	if !ok || p.IsText() != detected.IsText() {
+	if !ok {
+		return detected
+	}
+	if p.IsText() && !detected.IsText() {
 		return detected
 	}
 	return p
