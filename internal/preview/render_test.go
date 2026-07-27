@@ -174,3 +174,31 @@ func TestKittyClearIsADeleteCommand(t *testing.T) {
 		t.Fatalf("not a kitty delete command: %q", got)
 	}
 }
+
+// TestMultiplexerForcesBlockRendering: a multiplexer leaks the host
+// terminal's identity into its panes while swallowing the graphics that
+// identity implies, so the env check alone reports kitty where kitty does
+// not work. Detection must notice the multiplexer first.
+func TestMultiplexerForcesBlockRendering(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "ghostty") // what a herdr pane inherits from Ghostty
+	t.Setenv("KITTY_WINDOW_ID", "")
+
+	t.Setenv("HERDR_PANE_ID", "")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("TMUX", "")
+	if InMultiplexerWithoutGraphics() {
+		t.Error("no multiplexer env set, but reported as inside one")
+	}
+
+	for _, key := range []string{"HERDR_PANE_ID", "HERDR_ENV", "TMUX"} {
+		t.Setenv(key, "w5:pW")
+		if !InMultiplexerWithoutGraphics() {
+			t.Errorf("%s set but not detected as a multiplexer", key)
+		}
+		if got := DetectProtocol(); !got.IsText() {
+			t.Errorf("%s set: detected %v, want a block renderer — graphics escapes "+
+				"do not survive the multiplexer and the pane comes up blank", key, got)
+		}
+		t.Setenv(key, "")
+	}
+}

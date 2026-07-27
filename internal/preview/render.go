@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"os"
 	"strings"
 	"sync/atomic"
 
@@ -73,23 +74,28 @@ func (p Protocol) IsText() bool {
 // speak the iTerm2 protocol; Terminal.app speaks neither (measured:
 // `kitty:false sixel:false iterm:false`).
 //
-// Detection asks the terminal before trusting the environment, because
-// environment variables describe the innermost program — inside herdr they
-// describe herdr, not the Ghostty underneath it that will actually draw the
-// image.
+// Detection is environment-based on purpose. Actively probing the terminal
+// with a kitty query (`a=q`) was tried and reverted: inside herdr the query is
+// answered `OK`, but the image data never arrives — a `herdr pane read
+// --format ansi` of a pane running placer contains every SGR colour escape and
+// *zero* APC graphics commands. So the probe reports kitty where kitty does
+// not work, which is strictly worse than the environment check: that correctly
+// reports "no graphics" in a herdr pane and yields quadrant previews that
+// actually render. `:set render kitty` forces it for anyone whose multiplexer
+// does pass graphics through.
 //
 // The no-protocol fallback is quadrant blocks, not half-blocks: same
 // compatibility — they are legacy code-page glyphs present in every
 // monospace font — for twice the horizontal resolution. `:set render
 // halfblock` goes back if a font renders them with gaps.
 func DetectProtocol() Protocol {
+	if InMultiplexerWithoutGraphics() {
+		detected.Store(int32(ProtoQuadrant))
+		return ProtoQuadrant
+	}
 	p := ProtoQuadrant
 	switch {
-	// ProbeKitty first: env sniffing cannot see through a multiplexer, and a
-	// herdr pane hosted by Ghostty reports TERM_PROGRAM=Apple_Terminal with no
-	// KITTY_WINDOW_ID even though herdr forwards graphics straight through.
-	// Asking the terminal is the only way to know. See probe.go.
-	case ProbeKitty(), rasterm.IsKittyCapable():
+	case rasterm.IsKittyCapable():
 		p = ProtoKitty
 	case rasterm.IsItermCapable():
 		p = ProtoIterm
@@ -100,6 +106,28 @@ func DetectProtocol() Protocol {
 	}
 	detected.Store(int32(p))
 	return p
+}
+
+// InMultiplexerWithoutGraphics reports whether placer is running inside a
+// terminal multiplexer that does not forward graphics escapes.
+//
+// This has to be checked BEFORE the environment sniffing, because a
+// multiplexer leaks the host terminal's identity into its panes while
+// swallowing the graphics that identity implies. Measured for herdr: a pane
+// launched from Ghostty reports TERM_PROGRAM=ghostty, so rasterm calls it
+// kitty-capable — but `herdr pane read --format ansi` of a pane running placer
+// contains every SGR colour escape and *zero* APC graphics commands, and the
+// preview pane is simply blank. Launch the same herdr from Terminal.app and
+// panes report Apple_Terminal, detection falls back to blocks, and previews
+// render fine. That difference is the whole bug: it made the failure look like
+// terminal session state rather than detection.
+//
+// tmux is included by analogy, not measurement: it drops APC by default and
+// needs `allow-passthrough on`. Anyone whose multiplexer does forward graphics
+// can say so with `-render kitty`.
+func InMultiplexerWithoutGraphics() bool {
+	return os.Getenv("HERDR_PANE_ID") != "" || os.Getenv("HERDR_ENV") != "" ||
+		os.Getenv("TMUX") != ""
 }
 
 // detected remembers what DetectProtocol found, so a later `:set render auto`

@@ -385,31 +385,32 @@ func TestSameFileDoesNotRefetch(t *testing.T) {
 	}
 }
 
-// TestSavedRenderRules covers both halves of resolveProtocol, which are
-// deliberately asymmetric.
-func TestSavedRenderRules(t *testing.T) {
-	// A saved BLOCK renderer must not downgrade a graphics terminal. Picking
-	// "quadrant" while comparing block renderers in Terminal.app once left
-	// Ghostty rendering quadrant forever.
+// TestSavedRenderNeverCrossesTheCapabilityLine covers both directions, each
+// of which was a real bug that failed silently.
+func TestSavedRenderNeverCrossesTheCapabilityLine(t *testing.T) {
+	// A saved BLOCK renderer must not downgrade a graphics terminal: picking
+	// "quadrant" in Terminal.app once left Ghostty in quadrant forever.
 	for _, saved := range []string{"quadrant", "halfblock", "half", "quad"} {
 		if got := resolveProtocol(preview.ProtoKitty, saved); got != preview.ProtoKitty {
 			t.Errorf("saved %q downgraded a kitty terminal to %v", saved, got)
 		}
 	}
 
-	// A saved GRAPHICS renderer IS honoured even where detection found none.
-	// Detection can be a false negative — inside a multiplexer the environment
-	// describes the multiplexer, not the terminal underneath — and forcing the
-	// protocol is the escape hatch. Blocking it broke a working herdr setup.
-	if got := resolveProtocol(preview.ProtoQuadrant, "kitty"); got != preview.ProtoKitty {
-		t.Errorf("saved kitty was refused in a terminal detected as blocks: %v — "+
-			"that removes the only workaround when detection cannot see through "+
-			"a multiplexer", got)
+	// A saved GRAPHICS renderer must not be forced on a terminal with none:
+	// saved "kitty" made placer emit graphics inside a herdr pane, which drops
+	// them, leaving a blank preview and no error.
+	for _, saved := range []string{"kitty", "iterm", "sixel"} {
+		if got := resolveProtocol(preview.ProtoQuadrant, saved); got != preview.ProtoQuadrant {
+			t.Errorf("saved %q forced graphics on a block-only terminal: %v", saved, got)
+		}
 	}
 
-	// Within a class the override is honoured, which is what it is for.
+	// Within a class the override is honoured — that is all it is for.
 	if got := resolveProtocol(preview.ProtoQuadrant, "halfblock"); got != preview.ProtoHalfBlock {
 		t.Errorf("saved halfblock ignored in a block-only terminal: %v", got)
+	}
+	if got := resolveProtocol(preview.ProtoKitty, "iterm"); got != preview.ProtoIterm {
+		t.Errorf("saved iterm ignored in a graphics terminal: %v", got)
 	}
 
 	// No override, or an unparseable one, leaves detection alone.

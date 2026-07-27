@@ -18,7 +18,7 @@ import (
 	"github.com/CExSDixit/placer/internal/ui"
 )
 
-var version = "0.4.2-phase3"
+var version = "0.4.4-phase3"
 
 func main() {
 	var (
@@ -27,6 +27,7 @@ func main() {
 		fake     = flag.Bool("fake", false, "run against a synthetic library (no device needed)")
 		fixtures = flag.String("fixtures", "", "run against recorded content-query fixtures in this directory")
 		showVer  = flag.Bool("version", false, "print version and exit")
+		render   = flag.String("render", "", "force the image renderer for this run: kitty|iterm|sixel|quadrant|halfblock")
 	)
 	flag.Parse()
 
@@ -49,6 +50,19 @@ func main() {
 	// sixel probe puts the terminal in raw mode and reads its response itself.
 	preview.DetectCellPixels()
 	proto := preview.DetectProtocol()
+
+	// -render forces the renderer for this run only. Unlike `:set render` it is
+	// never persisted, so it cannot follow you into a terminal where it
+	// silently produces a blank pane — which is exactly what a saved "kitty"
+	// did inside herdr, where graphics escapes are dropped.
+	if *render != "" {
+		forced, ok := preview.ParseProtocol(*render)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "placer: -render must be one of kitty|iterm|sixel|quadrant|halfblock")
+			os.Exit(1)
+		}
+		proto = forced
+	}
 
 	p := tea.NewProgram(ui.New(dev, proto), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -161,27 +161,29 @@ func New(dev device.Device, proto preview.Protocol) Model {
 // resolveProtocol reconciles what the terminal advertises with a saved
 // `:set render` choice.
 //
-// A saved BLOCK renderer never downgrades a terminal that advertises
-// graphics: that setting is about choosing between block renderers when a
-// font draws the quadrant glyphs badly, and persisting it unconditionally
-// meant picking "quadrant" once in Terminal.app then getting quadrant in
-// Ghostty forever.
+// **A saved choice may pick between renderers the terminal can actually
+// drive, but never crosses the line between block rendering and a graphics
+// protocol.** Both directions of that were real bugs, and both failed
+// silently:
 //
-// A saved GRAPHICS renderer IS honoured even when detection found none. That
-// asymmetry is deliberate: detection can produce a false negative — inside a
-// multiplexer the environment describes the multiplexer, not the terminal
-// underneath — and forcing the protocol is the user's escape hatch when it
-// does. Blocking it broke a working herdr setup. DetectProtocol now probes
-// the terminal actively, so this should rarely be needed, but "rarely" is not
-// "never" and the override has to keep working.
+//   - Saved "quadrant" from comparing block renderers in Terminal.app left
+//     Ghostty rendering quadrant forever.
+//   - Saved "kitty" made placer emit graphics inside a herdr pane. herdr does
+//     not forward them — a `herdr pane read --format ansi` of a pane running
+//     placer contains every SGR colour escape and zero APC graphics commands —
+//     so the preview pane was simply blank, and it looked like a herdr
+//     session-state problem for several rounds.
 //
-// `:set render auto` clears it.
+// Persisting a cross-class override is a footgun because config.json is
+// shared across every terminal placer is ever run in, and the failure is an
+// empty pane with no error. Use the `-render` flag for a one-off force when
+// detection is genuinely wrong; it is not persisted and so cannot follow you
+// into another terminal.
+//
+// `:set render auto` clears the saved value.
 func resolveProtocol(detected preview.Protocol, saved string) preview.Protocol {
 	p, ok := preview.ParseProtocol(saved)
-	if !ok {
-		return detected
-	}
-	if p.IsText() && !detected.IsText() {
+	if !ok || p.IsText() != detected.IsText() {
 		return detected
 	}
 	return p

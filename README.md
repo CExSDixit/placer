@@ -216,6 +216,17 @@ Measured against a Pixel 6a, and these numbers drove the design:
 
 One terminal detail that silently breaks previews:
 
+- **A multiplexer leaks the host terminal's identity but not its
+  capabilities.** A herdr pane launched from Ghostty reports
+  `TERM_PROGRAM=ghostty`, so capability sniffing calls it kitty-capable — but
+  herdr does not forward graphics escapes: `herdr pane read --format ansi` of a
+  pane running placer contains every SGR colour escape and **zero** APC
+  graphics commands, and the preview pane is blank with no error. Launch the
+  same herdr from Terminal.app and panes report `Apple_Terminal`, detection
+  falls back to blocks, and previews render fine — which is why this presented
+  as "it used to work". `InMultiplexerWithoutGraphics` checks for herdr and
+  tmux before trusting the environment; `-render kitty` forces it for a
+  multiplexer that does pass graphics through.
 - **A terminal can be left wedged, and it looks exactly like a code bug.** Kitty
   images transmit as a chunked stream (`m=1` … `m=0`); killing placer
   mid-transmission leaves the terminal's graphics parser waiting for chunks that
