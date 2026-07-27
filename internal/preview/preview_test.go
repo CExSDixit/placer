@@ -14,7 +14,7 @@ func sampleDir(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join("..", "..", "testdata", "sample")
 	if _, err := os.Stat(dir); err != nil {
-		t.Skip("no testdata/sample; see rabbitholes/placer-phase2-handoff.md")
+		t.Skip("no testdata/sample; put real camera files (jpg/dng/mp4/wav) there to enable")
 	}
 	return dir
 }

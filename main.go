@@ -54,7 +54,7 @@ func main() {
 	// -render forces the renderer for this run only. Unlike `:set render` it is
 	// never persisted, so it cannot follow you into a terminal where it
 	// silently produces a blank pane — which is exactly what a saved "kitty"
-	// did inside herdr, where graphics escapes are dropped.
+	// did inside a multiplexer pane that drops graphics escapes.
 	if *render != "" {
 		forced, ok := preview.ParseProtocol(*render)
 		if !ok {

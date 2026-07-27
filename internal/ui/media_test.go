@@ -397,8 +397,8 @@ func TestSavedRenderNeverCrossesTheCapabilityLine(t *testing.T) {
 	}
 
 	// A saved GRAPHICS renderer must not be forced on a terminal with none:
-	// saved "kitty" made placer emit graphics inside a herdr pane, which drops
-	// them, leaving a blank preview and no error.
+	// saved "kitty" made placer emit graphics inside a multiplexer pane, which
+	// drops them, leaving a blank preview and no error.
 	for _, saved := range []string{"kitty", "iterm", "sixel"} {
 		if got := resolveProtocol(preview.ProtoQuadrant, saved); got != preview.ProtoQuadrant {
 			t.Errorf("saved %q forced graphics on a block-only terminal: %v", saved, got)

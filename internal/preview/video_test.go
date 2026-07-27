@@ -15,8 +15,8 @@ import (
 
 // largeSample is the one file in testdata/sample big enough to exercise the
 // sparse path meaningfully — a real 894 MB camera recording with `moov` at
-// the end. Gitignored like everything else there; see
-// rabbitholes/placer-phase3-handoff.md for how to re-pull it.
+// the end. Gitignored like everything else there; drop in any large camera
+// recording and update the name to re-enable.
 const largeSample = "PXL_20260613_234419633.TS.mp4"
 
 func largeVideo(t *testing.T) (string, device.File) {

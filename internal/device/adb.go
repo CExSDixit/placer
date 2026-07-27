@@ -89,8 +89,7 @@ func ShellQuote(s string) string { return shellQuote(s) }
 //
 // This must stay a single argument: `adb shell` re-joins argv and the device's
 // shell re-splits it on whitespace, so passing --sort "datetaken DESC" as a
-// separate arg arrives on the device as two tokens and fails. Same bug already
-// hit and fixed in cookbooks' pull-recent-photos.sh.
+// separate arg arrives on the device as two tokens and fails.
 func buildQuery(q Query) string {
 	var b strings.Builder
 	b.WriteString("content query --uri ")

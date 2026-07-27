@@ -168,11 +168,11 @@ func New(dev device.Device, proto preview.Protocol) Model {
 //
 //   - Saved "quadrant" from comparing block renderers in Terminal.app left
 //     Ghostty rendering quadrant forever.
-//   - Saved "kitty" made placer emit graphics inside a herdr pane. herdr does
-//     not forward them — a `herdr pane read --format ansi` of a pane running
-//     placer contains every SGR colour escape and zero APC graphics commands —
-//     so the preview pane was simply blank, and it looked like a herdr
-//     session-state problem for several rounds.
+//   - Saved "kitty" made placer emit graphics inside a multiplexer pane that
+//     does not forward them — a capture of the pane's output contained every
+//     SGR colour escape and zero APC graphics commands — so the preview pane
+//     was simply blank, and it looked like a terminal session-state problem
+//     for several rounds.
 //
 // Persisting a cross-class override is a footgun because config.json is
 // shared across every terminal placer is ever run in, and the failure is an

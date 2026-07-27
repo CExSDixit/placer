@@ -1,7 +1,6 @@
 // Package preview renders inline images and metadata cards for the file
-// list: pull the whole file (the EXIF head-bytes fast path was measured and
-// cut — adb pull is already faster than a partial fetch, see
-// rabbitholes/adb-fuzzy-file-browser-implementation-scope.md), decode,
+// list: pull the whole file (an EXIF head-bytes fast path was measured and
+// cut — adb pull is already faster than a partial fetch), decode,
 // downscale, cache, and render through whatever protocol the terminal
 // supports, falling back to Unicode half-blocks everywhere else.
 package preview

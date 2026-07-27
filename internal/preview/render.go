@@ -75,14 +75,14 @@ func (p Protocol) IsText() bool {
 // `kitty:false sixel:false iterm:false`).
 //
 // Detection is environment-based on purpose. Actively probing the terminal
-// with a kitty query (`a=q`) was tried and reverted: inside herdr the query is
-// answered `OK`, but the image data never arrives — a `herdr pane read
-// --format ansi` of a pane running placer contains every SGR colour escape and
-// *zero* APC graphics commands. So the probe reports kitty where kitty does
-// not work, which is strictly worse than the environment check: that correctly
-// reports "no graphics" in a herdr pane and yields quadrant previews that
-// actually render. `:set render kitty` forces it for anyone whose multiplexer
-// does pass graphics through.
+// with a kitty query (`a=q`) was tried and reverted: inside a multiplexer the
+// query can be answered `OK` while the image data never arrives — a capture
+// of such a pane's output contains every SGR colour escape and *zero* APC
+// graphics commands. So the probe reports kitty where kitty does not work,
+// which is strictly worse than the environment check: that correctly reports
+// "no graphics" in such a pane and yields quadrant previews that actually
+// render. `:set render kitty` forces it for anyone whose multiplexer does
+// pass graphics through.
 //
 // The no-protocol fallback is quadrant blocks, not half-blocks: same
 // compatibility — they are legacy code-page glyphs present in every
@@ -113,13 +113,13 @@ func DetectProtocol() Protocol {
 //
 // This has to be checked BEFORE the environment sniffing, because a
 // multiplexer leaks the host terminal's identity into its panes while
-// swallowing the graphics that identity implies. Measured for herdr: a pane
-// launched from Ghostty reports TERM_PROGRAM=ghostty, so rasterm calls it
-// kitty-capable — but `herdr pane read --format ansi` of a pane running placer
-// contains every SGR colour escape and *zero* APC graphics commands, and the
-// preview pane is simply blank. Launch the same herdr from Terminal.app and
-// panes report Apple_Terminal, detection falls back to blocks, and previews
-// render fine. That difference is the whole bug: it made the failure look like
+// swallowing the graphics that identity implies. Measured: a pane launched
+// from Ghostty reports TERM_PROGRAM=ghostty, so rasterm calls it
+// kitty-capable — but a capture of that pane's output contains every SGR
+// colour escape and *zero* APC graphics commands, and the preview pane is
+// simply blank. Launch the same multiplexer from Terminal.app and panes
+// report Apple_Terminal, detection falls back to blocks, and previews render
+// fine. That difference is the whole bug: it made the failure look like
 // terminal session state rather than detection.
 //
 // tmux is included by analogy, not measurement: it drops APC by default and

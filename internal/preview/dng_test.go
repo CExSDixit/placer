@@ -14,7 +14,7 @@ func sampleDNG(t *testing.T) []byte {
 	dir := filepath.Join("..", "..", "testdata", "sample")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Skip("no testdata/sample; see rabbitholes/placer-phase2-handoff.md")
+		t.Skip("no testdata/sample; put real camera files (jpg/dng/mp4/wav) there to enable")
 	}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".dng" {

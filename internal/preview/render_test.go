@@ -180,7 +180,7 @@ func TestKittyClearIsADeleteCommand(t *testing.T) {
 // identity implies, so the env check alone reports kitty where kitty does
 // not work. Detection must notice the multiplexer first.
 func TestMultiplexerForcesBlockRendering(t *testing.T) {
-	t.Setenv("TERM_PROGRAM", "ghostty") // what a herdr pane inherits from Ghostty
+	t.Setenv("TERM_PROGRAM", "ghostty") // what a multiplexer pane inherits from Ghostty
 	t.Setenv("KITTY_WINDOW_ID", "")
 
 	t.Setenv("HERDR_PANE_ID", "")
