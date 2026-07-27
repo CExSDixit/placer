@@ -165,17 +165,12 @@ func TestCellPixelsHasSaneDefaults(t *testing.T) {
 	}
 }
 
-// TestKittyClearTargetsOurPlacement: the delete must name placer's own image
-// id, not wipe every image in a terminal it may be sharing.
-func TestKittyClearTargetsOurPlacement(t *testing.T) {
+// TestKittyClearIsADeleteCommand: structural check only — the exact form is
+// pinned in wire_test.go, where the reasoning for deleting all placements
+// rather than a targeted id lives.
+func TestKittyClearIsADeleteCommand(t *testing.T) {
 	got := KittyClear()
 	if !strings.HasPrefix(got, "\x1b_Ga=d") || !strings.HasSuffix(got, "\x1b\\") {
 		t.Fatalf("not a kitty delete command: %q", got)
-	}
-	if !strings.Contains(got, "i=7301") {
-		t.Errorf("delete does not name our image id: %q", got)
-	}
-	if strings.Contains(got, "d=A") || strings.Contains(got, "d=a") {
-		t.Errorf("delete is indiscriminate and would wipe other programs' images: %q", got)
 	}
 }

@@ -256,38 +256,33 @@ func TestSeekStepsMatchTheSpec(t *testing.T) {
 
 var _ tea.Msg = playTickMsg{}
 
-// TestGraphicsOverlayAlwaysClearsKitty is the fix for images stacking up: a
-// kitty placement is persistent graphics that redrawing text does not erase,
-// so the delete has to go out even on frames with nothing to draw.
-func TestGraphicsOverlayAlwaysClearsKitty(t *testing.T) {
+// TestGraphicsOverlayErasesOnlyWhenThereIsNothingToDraw: the transmit
+// replaces the placement, so a drawing frame must not erase first; a frame
+// with no image must, or the previous photo stays on screen.
+func TestGraphicsOverlayErasesOnlyWhenThereIsNothingToDraw(t *testing.T) {
 	m := newTestModel(t)
 	m.proto = preview.ProtoKitty
+	f, _ := m.cur()
 
-	// Nothing loaded: still must clear, or the previous file's image stays.
 	m.preview = previewState{}
 	if got := m.graphicsOverlay(); !strings.Contains(got, "a=d") {
 		t.Errorf("empty preview emitted no delete: %q", got)
 	}
-
-	// A metadata card (video with autoplay off) draws no image, and the
-	// previous one must not survive underneath it.
-	f, _ := m.cur()
 	m.preview = previewState{path: previewKeyFor(f), result: preview.MetaCard(f, "video — autoplay off")}
 	if got := m.graphicsOverlay(); !strings.Contains(got, "a=d") {
 		t.Errorf("metadata card emitted no delete: %q", got)
 	}
 
-	// With an image, clear and draw go out together so nothing flickers.
 	m.preview = previewState{
 		path:   previewKeyFor(f),
 		result: preview.Result{Tier: preview.TierImage, Rendered: []byte("IMAGEBYTES")},
 	}
 	got := m.graphicsOverlay()
-	if !strings.Contains(got, "a=d") || !strings.Contains(got, "IMAGEBYTES") {
-		t.Errorf("expected delete followed by the image, got %q", got)
+	if strings.Contains(got, "a=d") {
+		t.Errorf("a frame that draws also erased: %q", got)
 	}
-	if strings.Index(got, "a=d") > strings.Index(got, "IMAGEBYTES") {
-		t.Error("the delete must precede the image, or it erases what was just drawn")
+	if !strings.Contains(got, "IMAGEBYTES") {
+		t.Errorf("frame does not carry the image: %q", got)
 	}
 }
 

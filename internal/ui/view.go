@@ -202,9 +202,10 @@ func (m Model) graphicsOverlay() string {
 		return ""
 	}
 	// Kitty placements are persistent graphics that redrawing text does not
-	// erase, so the previous preview has to be deleted explicitly on every
-	// frame — including the frames with nothing to draw, or moving from a
-	// photo to a metadata card would leave the photo on screen.
+	// erase. A new transmit reuses the same image and placement id, so it
+	// REPLACES the previous one — no erase needed on a frame that draws.
+	// Only a frame with nothing to draw has to delete explicitly, or moving
+	// from a photo to a metadata card would leave the photo on screen.
 	clear := ""
 	if m.proto == preview.ProtoKitty {
 		clear = preview.KittyClear()
@@ -227,9 +228,10 @@ func (m Model) graphicsOverlay() string {
 	const bodyStartRow = 3
 	row := bodyStartRow + 1
 	col := (m.w - pw - 1) + 2
-	// Clear and draw go out in the same write, so the terminal has both
-	// before it composites the next frame and nothing flickers.
-	return clear + fmt.Sprintf("\x1b[s\x1b[%d;%dH%s\x1b[u", row, col, res.Rendered)
+	// No erase here: the transmit reuses the same placement id and replaces
+	// whatever was there. Erasing first would delete the image and redraw it
+	// on every single repaint.
+	return fmt.Sprintf("\x1b[s\x1b[%d;%dH%s\x1b[u", row, col, res.Rendered)
 }
 
 func (m Model) header() string {

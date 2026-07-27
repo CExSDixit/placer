@@ -42,13 +42,41 @@ func cacheKey(f device.File, cellW, cellH int, proto Protocol, variant ...string
 	h := sha1.New()
 	fmt.Fprintf(h, "%s|%d|%d|%dx%d|%s", f.Path, f.Size, f.Added.Unix(), cellW, cellH, proto)
 	for _, v := range variant {
+		// Empty variants are skipped so that an explicit "" and an omitted
+		// argument hash identically. They did not, and the mismatch meant
+		// writeCache (which always passed a variant, "" for images) and
+		// readCache (which passed none) computed different keys — so image
+		// previews silently stopped being cached at all and every cursor rest
+		// re-pulled and re-rendered.
+		if v == "" {
+			continue
+		}
 		fmt.Fprintf(h, "|%s", v)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// renderVersion invalidates every cached render when the bytes we emit change.
+//
+// The cache stores *rendered protocol bytes*, keyed by file, geometry and
+// protocol — but not by how those bytes were produced. Without this, changing
+// what Render emits leaves previews coming back from disk in the old encoding
+// forever. Found while investigating something else: nine entries in
+// ~/.cache/placer/thumbs still carried a kitty header from an earlier
+// experiment (`grep -l i=7301`).
+//
+// **Bump this on any change to what Render emits.** Old entries become
+// unreachable and age out of the budget on their own, so nobody has to know
+// to clear a cache.
+const renderVersion = "r3"
+
 func cachePath(f device.File, cellW, cellH int, proto Protocol, variant ...string) string {
-	return filepath.Join(CacheDir(), cacheKey(f, cellW, cellH, proto, variant...)+".cache")
+	// Deliberately applied here and not in cacheKey: the media cache keys
+	// whole pulled files off cacheKey too, and those are hundreds of
+	// megabytes each. A render-format bump must not force them to be
+	// re-pulled — it has nothing to do with them.
+	key := cacheKey(f, cellW, cellH, proto, append([]string{renderVersion}, variant...)...)
+	return filepath.Join(CacheDir(), key+".cache")
 }
 
 func readCache(f device.File, cellW, cellH int, proto Protocol, variant ...string) ([]byte, bool) {

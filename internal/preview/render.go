@@ -102,24 +102,40 @@ var detected atomic.Int32
 // regardless of any override in force.
 func DetectedProtocol() Protocol { return Protocol(detected.Load()) }
 
-// placer only ever shows one preview image at a time, so it reuses a single
-// kitty image id and placement id. The number is arbitrary but must be stable
-// and unlikely to collide with another program sharing the terminal.
+// One image id and one placement id, reused for every preview, so a new
+// transmit REPLACES the previous placement instead of stacking another on top
+// of it. That is what fixes previews piling up without deleting and redrawing
+// on every repaint.
+//
+// `q=2` on every command is load-bearing, and was established by probing
+// Ghostty directly rather than read from the spec: a graphics command carrying
+// an image id is acknowledged on stdin — `<ESC>_Gi=7301,p=1;OK<ESC>\` — and
+// stdin is where Bubble Tea reads keystrokes, so without it every repaint
+// feeds an APC sequence into the key parser. Measured: no id → no reply; an id
+// → a reply; an id plus `q=2` → no reply.
 const (
 	kittyImageID     = 7301
 	kittyPlacementID = 1
 )
 
-// KittyClear deletes placer's placement and frees the image data behind it.
-//
-// This has to be emitted on EVERY frame that a kitty preview could be
-// visible, including the frames where there is nothing to draw: kitty images
-// are persistent graphics that ordinary text redraw does not erase, so a pane
-// that switches from a photo to a metadata card would otherwise keep showing
-// the photo. Sending it in the same write as the replacement image means the
-// terminal processes both before compositing, so there is no flicker.
+// KittyClear removes placer's placement and frees its data. Emitted only on a
+// frame with no image to draw — switching from a photo to a metadata card, for
+// instance — because kitty images are persistent graphics that ordinary text
+// redraw does not erase. A frame that draws needs no erase: the transmit
+// replaces the placement.
 func KittyClear() string {
-	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,p=%d\x1b\\", kittyImageID, kittyPlacementID)
+	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,p=%d,q=2\x1b\\", kittyImageID, kittyPlacementID)
+}
+
+// kittyQuiet inserts `q=2` into the transmit header rasterm builds, which
+// otherwise has no way to set it.
+func kittyQuiet(payload []byte) []byte {
+	const from = "\x1b_Ga=T,"
+	const to = "\x1b_Ga=T,q=2,"
+	if bytes.HasPrefix(payload, []byte(from)) {
+		return append([]byte(to), payload[len(from):]...)
+	}
+	return payload
 }
 
 // Render encodes img for the given protocol at cellW×cellH terminal cells.
@@ -128,16 +144,14 @@ func Render(img image.Image, proto Protocol, cellW, cellH int) ([]byte, error) {
 	switch proto {
 	case ProtoKitty:
 		var buf bytes.Buffer
-		// Every preview reuses one image id, and the overlay deletes that id
-		// before drawing. Kitty placements are persistent graphics, not text:
-		// without an explicit delete they simply accumulate, so the waveform
-		// for the file you just moved to lands on top of the photo you were
-		// looking at a moment ago.
+		// Fixed ids so each transmit replaces the previous placement, plus
+		// q=2 so the terminal does not acknowledge it into Bubble Tea's
+		// stdin. Both are load-bearing; see the constants above.
 		err := rasterm.KittyWriteImage(&buf, img, rasterm.KittyImgOpts{
 			DstCols: uint32(cellW), DstRows: uint32(cellH),
 			ImageId: kittyImageID, PlacementId: kittyPlacementID,
 		})
-		return buf.Bytes(), err
+		return kittyQuiet(buf.Bytes()), err
 	case ProtoIterm:
 		var buf bytes.Buffer
 		err := rasterm.ItermWriteImageWithOptions(&buf, img, rasterm.ItermImgOpts{

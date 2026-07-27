@@ -58,11 +58,11 @@ func downscale(img image.Image, cellW, cellH int, proto Protocol) image.Image {
 //	quadrant    2×2 — twice the horizontal detail for the same pane
 //	graphics    the terminal's real pixels-per-cell; the grid stops being the limit
 //
-// The graphics protocols were previously fed a source only cellW pixels wide,
-// i.e. ~48 px for a whole photo, and then asked to scale it up to fill the
-// pane. That threw away almost everything before the terminal ever saw it.
-// The replacement guess of 8×16 was still half the truth on a HiDPI display,
-// so the size now comes from the terminal itself — see DetectCellPixels.
+// The graphics protocols were once fed a source only cellW pixels wide, i.e.
+// ~48 px for a whole photo, and then asked to scale it up to fill the pane —
+// which threw away almost everything before the terminal ever saw it. A fixed
+// 8×16 was better but still half the truth on a HiDPI display, so the size
+// comes from the terminal itself; see DetectCellPixels.
 func (p Protocol) subcell() (int, int) {
 	switch p {
 	case ProtoQuadrant:

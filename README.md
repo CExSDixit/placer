@@ -152,7 +152,12 @@ is ~96×70 pixels of quadrant blocks against a real image at Kitty-protocol
 resolution.
 
 Rendered previews cache to `~/.cache/placer/thumbs/`, keyed by
-path+size+date_added+pane size+protocol+frame; pulled audio caches to
+path+size+date_added+pane size+protocol+frame+**render version**. The render
+version matters: the cache holds encoded protocol bytes, so without it a change
+to what the renderer emits keeps serving the old encoding from disk — which
+once made three consecutive renderer fixes look like they did nothing. Bump
+`renderVersion` in `cache.go` whenever `Render`'s output changes.
+Pulled audio caches to
 `~/.cache/placer/media/`, so pressing `space` after a preview is instant.
 The media cache holds whole audio files — voice memos on the reference device
 run 130–300 MB — so it is **capped at 2 GiB and pruned oldest-first at
@@ -202,6 +207,27 @@ Measured against a Pixel 6a, and these numbers drove the design:
   garbage that still decodes.
 - Local mtime is set from MediaStore `datetaken`, so pulled photos sort
   correctly in Finder.
+
+One terminal detail that silently breaks previews:
+
+- **A terminal can be left wedged, and it looks exactly like a code bug.** Kitty
+  images transmit as a chunked stream (`m=1` … `m=0`); killing placer
+  mid-transmission leaves the terminal's graphics parser waiting for chunks that
+  never arrive, and it then ignores subsequent graphics commands *for the life
+  of that terminal session*. Relaunching placer does not clear it — only a new
+  terminal does. This cost four rounds of chasing a phantom, and was settled by
+  dumping the rendered frame from the last known-good build and from HEAD and
+  diffing them: byte-identical output, so the fault was not in placer.
+  `internal/ui/frame_test.go` exists to make that comparison cheap next time.
+- **A kitty graphics command carrying an image id gets acknowledged on stdin**,
+  and stdin is where Bubble Tea reads keystrokes. Adding `i=`/`p=` to the
+  transmit — to delete placer's own placement precisely rather than all of
+  them — stopped previews rendering in Ghostty entirely. The sequence was
+  valid; the *reply* was the problem, one APC sequence into the key parser per
+  repaint. Probed against Ghostty directly: no id key → no reply, an id →
+  `<ESC>_Gi=7301,p=1;OK<ESC>\`, an id plus `q=2` → no reply. Every kitty
+  command placer emits is therefore response-free (no id, or `q=2`), which
+  `TestEveryKittyCommandIsResponseFree` enforces.
 
 Three ADB details that cause silent corruption if ignored, all encoded in the
 code and guarded by tests:
