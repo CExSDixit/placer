@@ -82,8 +82,24 @@ func (f File) Kind() Kind {
 		return KindAudio
 	}
 	switch f.Mime {
-	case "application/pdf", "text/plain", "text/markdown",
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+	case "application/pdf",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document", // docx
+		"application/msword", // legacy doc
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",         // xlsx
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation", // pptx
+		"application/epub+zip",
+		"application/zip",
+		"application/vnd.android.package-archive", // apk
+		"application/vnd.apple.pkpass",
+		"application/x-cbz", "application/vnd.comicbook+zip",
+		"multipart/related", "message/rfc822", // mht, reported both ways
+		"application/json":
+		return KindDoc
+	}
+	// Route the rest of the text-ish long tail by mime prefix rather than
+	// extension — several rows on the reference device (csv, ics, markdown,
+	// receipts with no extension at all) only carry a text/* mime.
+	if len(f.Mime) >= 5 && f.Mime[:5] == "text/" {
 		return KindDoc
 	}
 	return KindOther

@@ -19,6 +19,7 @@ const (
 	TierMeta              // heic and everything else — metadata card, no bytes fetched
 	TierVideo             // still frame grabbed from a sparse head+tail reconstruction
 	TierAudio             // showwavespic waveform, plus ffprobe metadata
+	TierDoc               // extracted text (pdf/docx/xlsx/text/zip-listing) rendered as plain lines
 )
 
 // Result is what Fetch hands back to the UI: either rendered image bytes
@@ -65,6 +66,8 @@ func FetchAt(ctx context.Context, dev device.Device, f device.File, cellW, cellH
 		return fetchVideo(ctx, dev, f, cellW, cellH, proto, at)
 	case device.KindAudio:
 		return fetchAudio(ctx, dev, f, cellW, cellH, proto)
+	case device.KindDoc:
+		return fetchDoc(ctx, dev, f, cellW, cellH, proto)
 	default:
 		return metaResult(f, "no preview for this file type"), nil
 	}

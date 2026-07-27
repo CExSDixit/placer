@@ -132,9 +132,11 @@ func (m Model) previewPaneView(pw, height int) string {
 	case m.preview.err != nil:
 		fill(errStyle.Render(pad(trunc(m.preview.err.Error(), pw), pw)))
 
-	case res.Tier == preview.TierMeta:
-		// The metadata card: whatever MediaStore knows, plus the reason there
-		// is no image — heic, ffmpeg missing, or video autoplay off.
+	case res.Tier == preview.TierMeta || res.Tier == preview.TierDoc:
+		// The metadata card, or a doc tier's extracted text — both are
+		// plain lines with no image, so they share this path. Meta carries
+		// key/value pairs for TierMeta and body text for TierDoc; either
+		// way it is just rows of dim, padded/truncated text.
 		for i := 1; i < height; i++ {
 			lines[i] = ""
 		}
