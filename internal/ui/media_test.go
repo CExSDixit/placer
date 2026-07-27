@@ -385,12 +385,13 @@ func TestSameFileDoesNotRefetch(t *testing.T) {
 	}
 }
 
-// TestSavedRenderNeverDowngradesAGraphicsTerminal is the regression Sid hit:
-// picking "quadrant" once in Terminal.app persisted it, and placer then used
-// quadrant in Ghostty forever. The setting exists to choose between BLOCK
-// renderers when the terminal has no image protocol; it must not override a
-// terminal that does.
-func TestSavedRenderNeverDowngradesAGraphicsTerminal(t *testing.T) {
+// TestSavedRenderNeverCrossesTheCapabilityLine covers both directions of the
+// same bug: a persisted `:set render` must never claim a capability the
+// terminal lacks, nor discard one it has.
+func TestSavedRenderNeverCrossesTheCapabilityLine(t *testing.T) {
+	// Block choice must not downgrade a graphics terminal. Picking "quadrant"
+	// while comparing block renderers in Terminal.app once left Ghostty
+	// rendering quadrant forever.
 	for _, saved := range []string{"quadrant", "halfblock", "half", "quad"} {
 		if got := resolveProtocol(preview.ProtoKitty, saved); got != preview.ProtoKitty {
 			t.Errorf("saved %q downgraded a kitty terminal to %v", saved, got)
@@ -400,16 +401,22 @@ func TestSavedRenderNeverDowngradesAGraphicsTerminal(t *testing.T) {
 		}
 	}
 
-	// In a terminal with no image protocol the saved block choice is exactly
-	// what it is for, and must win.
+	// Graphics choice must not be forced on a terminal with no graphics.
+	// A saved "kitty" made placer emit kitty escapes inside a herdr pane,
+	// which advertises none and silently swallows them — a blank preview that
+	// looked exactly like a herdr session-state problem.
+	for _, saved := range []string{"kitty", "iterm", "sixel"} {
+		if got := resolveProtocol(preview.ProtoQuadrant, saved); got != preview.ProtoQuadrant {
+			t.Errorf("saved %q forced graphics on a block-only terminal: %v", saved, got)
+		}
+	}
+
+	// Within a class the override is honoured — that is all it is for.
 	if got := resolveProtocol(preview.ProtoQuadrant, "halfblock"); got != preview.ProtoHalfBlock {
 		t.Errorf("saved halfblock ignored in a block-only terminal: %v", got)
 	}
-
-	// An explicitly saved graphics protocol is a deliberate choice and is
-	// always honoured.
-	if got := resolveProtocol(preview.ProtoQuadrant, "kitty"); got != preview.ProtoKitty {
-		t.Errorf("saved kitty ignored: %v", got)
+	if got := resolveProtocol(preview.ProtoKitty, "iterm"); got != preview.ProtoIterm {
+		t.Errorf("saved iterm ignored in a graphics terminal: %v", got)
 	}
 
 	// No override, or an unparseable one, leaves detection alone.

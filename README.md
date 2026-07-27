@@ -136,10 +136,16 @@ difference is subtle — the pane is small either way. Each cell can
 carry only two colours, so the renderer tries all 16 foreground/background
 partitions of the 2×2 block and keeps the one with the least squared error.
 `:set render halfblock` reverts if a font draws them with gaps, and
-`:set render auto` goes back to autodetection. A saved block-renderer choice
-never overrides a terminal that does support images — the setting is about
-choosing between block renderers, so picking one in Terminal.app must not
-follow you into Ghostty.
+`:set render auto` goes back to autodetection.
+
+A saved choice may pick between renderers the terminal can actually drive, but
+never crosses the line between block rendering and a graphics protocol — it
+cannot claim a capability the terminal lacks, nor discard one it has. Both
+halves were real bugs: picking `quadrant` once in Terminal.app left Ghostty
+rendering quadrant forever, and picking `kitty` once made placer emit kitty
+escapes inside a **herdr** pane, which advertises no graphics protocol and
+silently swallows them — a blank preview that looked exactly like a terminal
+session-state problem.
 
 Graphics-protocol previews are sized from the terminal's real pixels-per-cell,
 queried via TIOCGWINSZ rather than assumed — a fixed guess is half the truth on

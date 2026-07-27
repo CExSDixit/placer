@@ -18,7 +18,7 @@ import (
 	"github.com/CExSDixit/placer/internal/ui"
 )
 
-var version = "0.4.0-phase3"
+var version = "0.4.1-phase3"
 
 func main() {
 	var (
