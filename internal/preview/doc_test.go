@@ -61,7 +61,11 @@ func TestDocTier_TextExtraction(t *testing.T) {
 		{"AVIE967605A.PDF", "application/pdf", TierDoc, "Centretown Veterinary Hospital"},
 		{"The Kubebuilder Book.pdf", "application/pdf", TierDoc, ""},
 		{"water_bills_tax_reference.docx", mimeDocx, TierDoc, ""},
-		{"market_analysis-1.xlsx", mimeXlsx, TierDoc, "sheets:"},
+		// market_analysis-1.xlsx has no xl/sharedStrings.xml at all — every
+		// string is inline in the worksheet — so this also pins that the
+		// inline-string path alone produces a real table, not just a sheet
+		// name.
+		{"market_analysis-1.xlsx", mimeXlsx, TierDoc, "Role / Ti"},
 		{"appointment.ics", "text/calendar", TierDoc, ""},
 		{"mm_weighttracker_backup_2023_07_12.csv", "text/csv", TierDoc, ""},
 		{"dtoken.epub", "application/epub+zip", TierDoc, ""},
@@ -92,6 +96,54 @@ func TestDocTier_TextExtraction(t *testing.T) {
 				t.Errorf("Meta does not contain %q: %v", c.contains, res.Meta)
 			}
 		})
+	}
+}
+
+// TestDocTier_XlsxMultiColumn pins the fix for a real gap: the old
+// extraction only dumped a flat, order-joined shared-strings blob, which for
+// this exact sample (no xl/sharedStrings.xml at all — every cell is inline)
+// produced almost nothing. The new extraction must show several distinct
+// columns from the same row, not just the first one.
+func TestDocTier_XlsxMultiColumn(t *testing.T) {
+	dir := docsDir(t)
+	dev := docDev(t, dir)
+	f := docFile(t, dir, "market_analysis-1.xlsx", mimeXlsx)
+
+	res, err := Fetch(context.Background(), dev, f, 80, 20, ProtoHalfBlock)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	joined := strings.Join(res.Meta, "\n")
+	for _, want := range []string{"Role / T", "Canada", "DevOps En"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Meta missing %q — columns beyond the first are not rendering: %v", want, res.Meta)
+		}
+	}
+}
+
+// TestDocTier_PDFAccumulatesPages pins the fix for a real gap: extraction
+// used to stop at the FIRST page clearing the watermark threshold, so a
+// document with a short first text-bearing page showed only that page even
+// when later pages had much more. A multi-page book should now yield text
+// that spans more than one page's worth.
+func TestDocTier_PDFAccumulatesPages(t *testing.T) {
+	dir := docsDir(t)
+	data, err := os.ReadFile(filepath.Join(dir, "The Kubebuilder Book.pdf"))
+	if err != nil {
+		t.Skipf("sample not present: %v", err)
+	}
+	text, pages, ok := extractPDFText(data)
+	if !ok {
+		t.Fatal("extractPDFText: no text extracted")
+	}
+	if pages < 2 {
+		t.Skip("sample is not multi-page; accumulation has nothing to prove here")
+	}
+	// A single page of this book runs well under 1000 runes; accumulating
+	// several should clear that comfortably if more than one page's text
+	// made it into the result.
+	if n := len([]rune(text)); n < 1000 {
+		t.Fatalf("accumulated text is only %d runes — looks like a single page, not several", n)
 	}
 }
 

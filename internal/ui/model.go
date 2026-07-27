@@ -713,14 +713,20 @@ func (m Model) handleKey(km tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "enter":
 			m.mode = modeNormal
 			m.input.Blur()
-			return m, nil
+			// previewPaneWidth() was 0 for every keystroke of this search
+			// (previews are suppressed while typing), so the generic
+			// curPreviewKey()-diff reschedule in Update() sees no identity
+			// change even for an exact match landed at cursor 0 throughout
+			// — the mode flip itself is what makes the pane visible again,
+			// and nothing else will trigger the fetch.
+			return m, m.schedulePreview()
 		case "ctrl+c":
 			m.mode = modeNormal
 			m.query = ""
 			m.input.SetValue("")
 			m.input.Blur()
 			m.rebuildKeepingCursor()
-			return m, nil
+			return m, m.schedulePreview()
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(km)

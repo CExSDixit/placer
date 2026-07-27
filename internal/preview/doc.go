@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/jpeg"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -34,7 +35,8 @@ const (
 	docHeadMiB      = 1       // ~1 MiB head pull for oversized text files
 	maxDocLines     = 400     // bounds cache size and render cost; plenty for a preview
 	minPDFTextRunes = 40      // below this a "text" page is really just a watermark
-	pdfTextPages    = 3       // cover pages are often image-only; check a few
+	pdfTextPages    = 8       // cover pages are often image-only; check a few, then accumulate
+	pdfTextBudget   = 6000    // rune ceiling across accumulated pages — plenty for maxDocLines after wrapping
 )
 
 var (
@@ -191,11 +193,13 @@ func fetchPDF(ctx context.Context, dev device.Device, f device.File, cellW, cell
 	}
 }
 
-// extractPDFText scans the first few pages for the first one carrying real
-// text (cover pages are often image-only). The rsc.io/pdf lineage panics on
-// malformed input rather than returning an error, so this is wrapped in a
-// recover — a corrupt PDF must fall through to the image/metadata rungs of
-// the ladder, never crash the fetch.
+// extractPDFText scans the first several pages and accumulates their text —
+// a document whose first text-bearing page is short (a title page, a single
+// caption) should still show the fuller content on the pages after it, not
+// stop at the first page that clears the watermark threshold on its own. The
+// rsc.io/pdf lineage panics on malformed input rather than returning an
+// error, so this is wrapped in a recover — a corrupt PDF must fall through
+// to the image/metadata rungs of the ladder, never crash the fetch.
 func extractPDFText(data []byte) (text string, pages int, ok bool) {
 	defer func() {
 		if recover() != nil {
@@ -212,7 +216,8 @@ func extractPDFText(data []byte) (text string, pages int, ok bool) {
 		limit = pdfTextPages
 	}
 	fonts := map[string]*pdf.Font{}
-	for i := 1; i <= limit; i++ {
+	var b strings.Builder
+	for i := 1; i <= limit && b.Len() < pdfTextBudget; i++ {
 		p := rd.Page(i)
 		if p.V.IsNull() {
 			continue
@@ -227,10 +232,24 @@ func extractPDFText(data []byte) (text string, pages int, ok bool) {
 		if err != nil {
 			continue
 		}
-		cleaned := cleanText(raw)
-		if utf8.RuneCountInString(strings.TrimSpace(cleaned)) > minPDFTextRunes {
-			return cleaned, pages, true
+		cleaned := strings.TrimSpace(cleanText(raw))
+		// Only a page that clears the watermark bar ON ITS OWN gets
+		// accumulated — otherwise a scanned document whose pages each carry
+		// a few words of stamp/watermark text (e.g. "CamScanner" repeated
+		// on every page) sums past the threshold through repetition alone,
+		// which is exactly the false positive minPDFTextRunes exists to
+		// prevent.
+		if utf8.RuneCountInString(cleaned) <= minPDFTextRunes {
+			continue
 		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(cleaned)
+	}
+	accumulated := b.String()
+	if accumulated != "" {
+		return accumulated, pages, true
 	}
 	return "", pages, false
 }
@@ -391,10 +410,19 @@ func fetchXlsx(ctx context.Context, dev device.Device, f device.File, cellW, cel
 	return docTextResult(f, cellW, cellH, proto, lines), nil
 }
 
-// extractXlsxSummary reads sheet names from xl/workbook.xml and, when
-// present, the head of xl/sharedStrings.xml — spike-verified: sharedStrings
-// can be empty on numeric/inline-only sheets, so sheet names alone must be
-// enough to produce a result.
+const (
+	xlsxMaxRows = 12
+	xlsxMaxCols = 6
+)
+
+// extractXlsxSummary reads sheet names from xl/workbook.xml, then renders the
+// first sheet's actual rows/columns as a small table. Cells come in three
+// shapes: t="inlineStr" (text inline in the worksheet), t="s" (an index into
+// xl/sharedStrings.xml), and everything else (numeric or formula-result raw
+// values in <v>). sharedStrings.xml is frequently absent entirely — spike-
+// verified on the reference device's own sample (no numeric/formula sheet
+// needs it) — so sheet names plus inline/raw cells alone must still produce
+// a usable table.
 func extractXlsxSummary(data []byte, width int) ([]string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -410,13 +438,186 @@ func extractXlsxSummary(data []byte, width int) ([]string, error) {
 	}
 	lines := wrapText("sheets: "+strings.Join(names, ", "), width)
 
+	sheet := zipFind(zr, "xl/worksheets/sheet1.xml")
+	if sheet == nil {
+		return lines, nil
+	}
+	var shared []string
 	if ss := zipFind(zr, "xl/sharedStrings.xml"); ss != nil {
-		if strs, err := sharedStringsHead(ss, 40); err == nil && len(strs) > 0 {
-			lines = append(lines, "")
-			lines = append(lines, wrapText(strings.Join(strs, "  "), width)...)
+		shared, _ = sharedStrings(ss)
+	}
+	rows, err := sheetRows(sheet, shared, xlsxMaxRows, xlsxMaxCols)
+	if err != nil || len(rows) == 0 {
+		return lines, nil
+	}
+	lines = append(lines, "")
+	lines = append(lines, renderTable(rows, width)...)
+	return lines, nil
+}
+
+// sheetRows streams the worksheet's XML (rather than unmarshalling it whole
+// — a 74-row sample sheet is small, but there's no reason to hold a large
+// one entirely in memory just to read its first dozen rows) and returns the
+// first maxRows non-blank rows, each with up to maxCols cell values aligned
+// by their column letter so sparse rows still line up.
+func sheetRows(zf *zip.File, shared []string, maxRows, maxCols int) ([][]string, error) {
+	rc, err := zf.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+
+	var rows [][]string
+	var curRow []string
+	var curCol int
+	var curType string
+	var curVal strings.Builder
+	inCell, inIS, capture := false, false, false
+
+	flushCell := func() {
+		if !inCell {
+			return
+		}
+		val := curVal.String()
+		if curType == "s" {
+			idx, err := strconv.Atoi(strings.TrimSpace(val))
+			if err != nil || idx < 0 || idx >= len(shared) {
+				val = ""
+			} else {
+				val = shared[idx]
+			}
+		}
+		if curCol >= 0 && curCol < maxCols {
+			for len(curRow) <= curCol {
+				curRow = append(curRow, "")
+			}
+			curRow[curCol] = val
+		}
+		inCell = false
+	}
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "row":
+				curRow = nil
+			case "c":
+				inCell = true
+				curType = xmlAttr(t, "t")
+				curVal.Reset()
+				curCol = colIndex(xmlAttr(t, "r"))
+			case "is":
+				inIS = true
+			case "t":
+				capture = inIS
+			case "v":
+				capture = true
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "t", "v":
+				capture = false
+			case "is":
+				inIS = false
+			case "c":
+				flushCell()
+			case "row":
+				if rowHasContent(curRow) {
+					rows = append(rows, curRow)
+					if len(rows) >= maxRows {
+						return rows, nil
+					}
+				}
+			}
+		case xml.CharData:
+			if capture {
+				curVal.Write(t)
+			}
 		}
 	}
-	return lines, nil
+	return rows, nil
+}
+
+func xmlAttr(t xml.StartElement, name string) string {
+	for _, a := range t.Attr {
+		if a.Name.Local == name {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+// colIndex turns a cell reference like "B6" or "AA12" into a zero-based
+// column index.
+func colIndex(ref string) int {
+	col := 0
+	for _, r := range ref {
+		if r < 'A' || r > 'Z' {
+			break
+		}
+		col = col*26 + int(r-'A'+1)
+	}
+	return col - 1
+}
+
+func rowHasContent(row []string) bool {
+	for _, c := range row {
+		if strings.TrimSpace(c) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// renderTable lays rows out as fixed-width columns sized to share the pane's
+// width, so several columns are visible at once rather than one long wrapped
+// string of concatenated cell values.
+func renderTable(rows [][]string, width int) []string {
+	cols := 0
+	for _, r := range rows {
+		if len(r) > cols {
+			cols = len(r)
+		}
+	}
+	if cols == 0 {
+		return nil
+	}
+	colW := width / cols
+	if colW < 6 {
+		colW = 6
+	}
+	if colW > 20 {
+		colW = 20
+	}
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		parts := make([]string, cols)
+		for i := 0; i < cols; i++ {
+			v := ""
+			if i < len(r) {
+				v = r[i]
+			}
+			parts[i] = padTrunc(v, colW)
+		}
+		lines = append(lines, strings.TrimRight(strings.Join(parts, " "), " "))
+	}
+	return lines
+}
+
+func padTrunc(s string, w int) string {
+	if len(s) > w {
+		if w <= 1 {
+			return s[:w]
+		}
+		return s[:w-1] + "…"
+	}
+	return s + strings.Repeat(" ", w-len(s))
 }
 
 func sheetNames(zf *zip.File) ([]string, error) {
@@ -442,7 +643,11 @@ func sheetNames(zf *zip.File) ([]string, error) {
 	return names, nil
 }
 
-func sharedStringsHead(zf *zip.File, n int) ([]string, error) {
+// sharedStrings reads the full shared-strings table, index-aligned — a
+// t="s" cell in the worksheet refers to a position in this list, so unlike
+// the old head-only variant this cannot skip blank entries without breaking
+// every lookup after the first one.
+func sharedStrings(zf *zip.File) ([]string, error) {
 	rc, err := zf.Open()
 	if err != nil {
 		return nil, err
@@ -456,15 +661,9 @@ func sharedStringsHead(zf *zip.File, n int) ([]string, error) {
 	if err := xml.NewDecoder(rc).Decode(&sst); err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, n)
-	for _, si := range sst.SI {
-		if si.T == "" {
-			continue
-		}
-		out = append(out, si.T)
-		if len(out) >= n {
-			break
-		}
+	out := make([]string, len(sst.SI))
+	for i, si := range sst.SI {
+		out[i] = si.T
 	}
 	return out, nil
 }
